@@ -6,7 +6,6 @@ mode: srv
 
 # Connection topology
 link: direct           # p2p link type
-carrier: ""            # leave empty for default selection from auth provider
 
 auth:
   provider: wbstream   # telemost | jazz | wbstream | none

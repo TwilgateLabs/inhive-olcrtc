@@ -23,7 +23,6 @@ var ErrConfigNotFound = errors.New("config file not found")
 type File struct {
 	Mode     string  `yaml:"mode"`
 	Link     string  `yaml:"link"`
-	Carrier  string  `yaml:"carrier"`
 	Auth     Auth    `yaml:"auth"`
 	Room     Room    `yaml:"room"`
 	Crypto   Crypto  `yaml:"crypto"`

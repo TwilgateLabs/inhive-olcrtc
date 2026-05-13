@@ -5,7 +5,6 @@
 mode: cnc
 
 link: direct
-carrier: ""
 
 auth:
   provider: wbstream   # must match the server
