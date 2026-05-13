@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	cryptopkg "github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
@@ -343,4 +344,129 @@ func TestHandleStreamDispatchAfterConnect(t *testing.T) {
 		t.Fatalf("Write() error = %v", err)
 	}
 	<-done
+}
+
+func TestReinstallSessionFiresOnClose(t *testing.T) {
+	cipher, err := cryptopkg.NewCipher("01234567890123456789012345678901")
+	if err != nil {
+		t.Fatalf("NewCipher() error = %v", err)
+	}
+	var got struct {
+		sid    string
+		reason string
+	}
+	s := &Server{
+		ln:        &serverLinkStub{},
+		cipher:    cipher,
+		sessionID: "sid-123",
+		deviceID:  "dev-123",
+		onClose:   func(sid, reason string) { got.sid = sid; got.reason = reason },
+	}
+	s.closeSession()
+	if got.sid != "sid-123" || got.reason != "closed" {
+		t.Fatalf("onClose = %+v, want {sid-123 closed}", got)
+	}
+}
+
+func TestDispatchFiresOnTraffic(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	const greeting = "hi\n"
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_, _ = c.Write([]byte(greeting))
+	}()
+
+	a, b := net.Pipe()
+	defer func() {
+		_ = a.Close()
+		_ = b.Close()
+	}()
+
+	serverSess, err := smux.Server(a, smuxConfig())
+	if err != nil {
+		t.Fatalf("smux.Server() error = %v", err)
+	}
+	defer func() { _ = serverSess.Close() }()
+	clientSess, err := smux.Client(b, smuxConfig())
+	if err != nil {
+		t.Fatalf("smux.Client() error = %v", err)
+	}
+	defer func() { _ = clientSess.Close() }()
+
+	var rec struct {
+		sid      string
+		addr     string
+		in, out  uint64
+	}
+	recChan := make(chan struct{})
+	s := &Server{
+		sessionID: "traffic-sid",
+		resolver:  net.DefaultResolver,
+		onTraffic: func(sid, addr string, in, out uint64) {
+			rec.sid = sid
+			rec.addr = addr
+			rec.in = in
+			rec.out = out
+			close(recChan)
+		},
+	}
+
+	go func() {
+		stream, err := serverSess.AcceptStream()
+		if err != nil {
+			return
+		}
+		s.handleStream(context.Background(), stream)
+	}()
+
+	stream, err := clientSess.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream() error = %v", err)
+	}
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("addr type = %T", ln.Addr())
+	}
+	req, err := json.Marshal(ConnectRequest{
+		Cmd:  "connect",
+		Addr: "127.0.0.1",
+		Port: tcpAddr.Port,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if _, err := stream.Write(req); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	ack := make([]byte, 1)
+	if _, err := io.ReadFull(stream, ack); err != nil {
+		t.Fatalf("read ack: %v", err)
+	}
+	body := make([]byte, len(greeting))
+	if _, err := io.ReadFull(stream, body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = stream.Close()
+
+	select {
+	case <-recChan:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onTraffic did not fire")
+	}
+	if rec.sid != "traffic-sid" {
+		t.Fatalf("sid = %q, want traffic-sid", rec.sid)
+	}
+	if rec.out < uint64(len(greeting)) {
+		t.Fatalf("bytesOut = %d, want >= %d", rec.out, len(greeting))
+	}
 }

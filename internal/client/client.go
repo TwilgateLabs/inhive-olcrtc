@@ -241,11 +241,20 @@ func openControlStream(
 	deviceID string,
 	claims map[string]any,
 ) (*smux.Stream, string, error) {
+	return openControlStreamTimeout(sess, deviceID, claims, handshake.DefaultTimeout)
+}
+
+func openControlStreamTimeout(
+	sess *smux.Session,
+	deviceID string,
+	claims map[string]any,
+	timeout time.Duration,
+) (*smux.Stream, string, error) {
 	stream, err := sess.OpenStream()
 	if err != nil {
 		return nil, "", fmt.Errorf("open control stream: %w", err)
 	}
-	_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
+	_ = stream.SetDeadline(time.Now().Add(timeout))
 	sid, err := handshake.Client(stream, deviceID, claims)
 	_ = stream.SetDeadline(time.Time{})
 	if err != nil {
@@ -303,32 +312,71 @@ func smuxConfig() *smux.Config {
 
 func (c *Client) handleReconnect() {
 	logger.Infof("client link reconnect - tearing down smux session")
+
+	// Install a fresh muxconn immediately so onData never hits nil while
+	// the old session is being torn down. tryReopenSession will swap it
+	// again with its own conn on each attempt.
+	newConn := muxconn.New(c.ln, c.cipher)
+
 	c.sessMu.Lock()
-	if c.controlStrm != nil {
-		_ = c.controlStrm.Close()
-		c.controlStrm = nil
-	}
-	if c.session != nil {
-		_ = c.session.Close()
-		c.session = nil
-	}
-	if c.conn != nil {
-		_ = c.conn.Close()
-		c.conn = nil
-	}
+	oldControl := c.controlStrm
+	oldSess := c.session
+	oldConn := c.conn
+	c.conn = newConn
+	c.session = nil
+	c.controlStrm = nil
 	c.sessionID = ""
 	c.sessMu.Unlock()
-	c.conn = muxconn.New(c.ln, c.cipher)
-	sess, err := smux.Client(c.conn, smuxConfig())
-	if err != nil {
-		logger.Warnf("smux re-init failed: %v", err)
-		return
+
+	if oldControl != nil {
+		_ = oldControl.Close()
 	}
-	control, sid, err := openControlStream(sess, c.deviceID, c.claims)
+	if oldSess != nil {
+		_ = oldSess.Close()
+	}
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+
+	// Server-side may still be tearing down its own session when our callback
+	// fires — carriers don't guarantee reconnect callbacks are delivered to both
+	// peers atomically. Retry the handshake a few times, building a fresh
+	// muxconn+smux pair on each attempt so a failed smux.Close doesn't corrupt
+	// the byte stream for subsequent attempts.
+	const (
+		maxAttempts  = 5
+		attemptDelay = 300 * time.Millisecond
+	)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if c.tryReopenSession(attempt) {
+			return
+		}
+		time.Sleep(attemptDelay)
+	}
+	logger.Warnf("client reconnect: exhausted %d handshake attempts", maxAttempts)
+}
+
+func (c *Client) tryReopenSession(attempt int) bool {
+	conn := muxconn.New(c.ln, c.cipher)
+
+	c.sessMu.Lock()
+	old := c.conn
+	c.conn = conn
+	c.sessMu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+
+	sess, err := smux.Client(conn, smuxConfig())
 	if err != nil {
-		logger.Warnf("handshake on reconnect failed: %v", err)
+		logger.Warnf("smux re-init failed (attempt %d): %v", attempt, err)
+		return false
+	}
+	control, sid, err := openControlStreamTimeout(sess, c.deviceID, c.claims, 2*time.Second)
+	if err != nil {
+		logger.Warnf("handshake on reconnect failed (attempt %d): %v", attempt, err)
 		_ = sess.Close()
-		return
+		return false
 	}
 	logger.Infof("session %s reopened (device=%s)", sid, c.deviceID)
 	c.sessMu.Lock()
@@ -336,6 +384,7 @@ func (c *Client) handleReconnect() {
 	c.controlStrm = control
 	c.sessionID = sid
 	c.sessMu.Unlock()
+	return true
 }
 
 func (c *Client) shutdown() {

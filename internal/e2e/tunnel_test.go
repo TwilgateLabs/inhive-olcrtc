@@ -131,9 +131,15 @@ func (r *memoryRoom) triggerReconnect() {
 	}
 	r.mu.Unlock()
 
+	var wg sync.WaitGroup
 	for _, stream := range streams {
-		stream.triggerReconnect()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stream.triggerReconnect()
+		}()
 	}
+	wg.Wait()
 }
 
 func (r *memoryRoom) triggerEnded(reason string) {

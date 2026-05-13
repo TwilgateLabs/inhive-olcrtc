@@ -36,6 +36,19 @@ var (
 	ErrSocks5ConnectFailed = errors.New("SOCKS5 connect failed")
 )
 
+// SessionOpenFunc is called after a successful handshake, before the server
+// accepts tunnel streams on that session.
+type SessionOpenFunc func(sessionID, deviceID string, claims map[string]any)
+
+// SessionCloseFunc is called when a session is torn down. Possible reasons:
+// "reconnect" (carrier dropped and was reestablished), "closed" (graceful
+// shutdown or ctx cancel).
+type SessionCloseFunc func(sessionID, reason string)
+
+// TrafficFunc is called once per tunnel stream, after the copy loops finish.
+// bytesIn counts client→target bytes; bytesOut counts target→client bytes.
+type TrafficFunc func(sessionID, addr string, bytesIn, bytesOut uint64)
+
 // Server handles incoming tunnel connections and proxies their traffic.
 type Server struct {
 	ln             link.Link
@@ -46,6 +59,9 @@ type Server struct {
 	reinstallMu    sync.Mutex
 	wg             sync.WaitGroup
 	authHook       handshake.AuthFunc
+	onOpen         SessionOpenFunc
+	onClose        SessionCloseFunc
+	onTraffic      TrafficFunc
 	deviceID       string
 	sessionID      string
 	dnsServer      string
@@ -94,6 +110,13 @@ type Config struct {
 	// AuthHook is invoked after CLIENT_HELLO to authorize the client and
 	// return a session ID. If nil, every client is admitted with a random UUID.
 	AuthHook handshake.AuthFunc
+
+	// OnSessionOpen fires after a successful handshake. Nil means no-op.
+	OnSessionOpen SessionOpenFunc
+	// OnSessionClose fires when the session is torn down (reconnect, closed). Nil means no-op.
+	OnSessionClose SessionCloseFunc
+	// OnTraffic fires once per tunnel stream after both copy loops finish. Nil means no-op.
+	OnTraffic TrafficFunc
 }
 
 // Run starts the server with the given configuration.
@@ -110,10 +133,25 @@ func Run(ctx context.Context, cfg Config) error {
 	if hook == nil {
 		hook = defaultAuthHook
 	}
+	onOpen := cfg.OnSessionOpen
+	if onOpen == nil {
+		onOpen = func(string, string, map[string]any) {}
+	}
+	onClose := cfg.OnSessionClose
+	if onClose == nil {
+		onClose = func(string, string) {}
+	}
+	onTraffic := cfg.OnTraffic
+	if onTraffic == nil {
+		onTraffic = func(string, string, uint64, uint64) {}
+	}
 
 	s := &Server{
 		cipher:         cipher,
 		authHook:       hook,
+		onOpen:         onOpen,
+		onClose:        onClose,
+		onTraffic:      onTraffic,
 		dnsServer:      cfg.DNSServer,
 		socksProxyAddr: cfg.SOCKSProxyAddr,
 		socksProxyPort: cfg.SOCKSProxyPort,
@@ -268,23 +306,41 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 	s.reinstallMu.Lock()
 	defer s.reinstallMu.Unlock()
 
-	s.sessMu.Lock()
-	if s.session != dead {
-		s.sessMu.Unlock()
+	// Pre-build the replacement so we can swap atomically below.
+	newConn := muxconn.New(s.ln, s.cipher)
+	newSess, err := smux.Server(newConn, smuxConfig())
+	if err != nil {
+		logger.Warnf("smux server init failed: %v", err)
+		_ = newConn.Close()
 		return
 	}
-	if s.session != nil {
-		_ = s.session.Close()
-		s.session = nil
+
+	s.sessMu.Lock()
+	if s.session != dead {
+		// Someone else already reinstalled — discard our build.
+		s.sessMu.Unlock()
+		_ = newSess.Close()
+		_ = newConn.Close()
+		return
 	}
-	if s.conn != nil {
-		_ = s.conn.Close()
-		s.conn = nil
-	}
+	oldSess := s.session
+	oldConn := s.conn
+	oldSID := s.sessionID
+	s.session = newSess
+	s.conn = newConn
 	s.sessionID = ""
 	s.deviceID = ""
 	s.sessMu.Unlock()
-	s.installSession()
+
+	if oldSess != nil {
+		_ = oldSess.Close()
+	}
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	if oldSID != "" {
+		s.onClose(oldSID, "reconnect")
+	}
 }
 
 func (s *Server) closeSession() {
@@ -297,9 +353,13 @@ func (s *Server) closeSession() {
 		_ = s.conn.Close()
 		s.conn = nil
 	}
+	oldSID := s.sessionID
 	s.sessionID = ""
 	s.deviceID = ""
 	s.sessMu.Unlock()
+	if oldSID != "" {
+		s.onClose(oldSID, "closed")
+	}
 }
 
 func (s *Server) onData(data []byte) {
@@ -393,6 +453,7 @@ func (s *Server) acceptHandshake(ctx context.Context, sess *smux.Session) bool {
 	s.deviceID = hello.DeviceID
 	s.sessionID = sid
 	s.sessMu.Unlock()
+	s.onOpen(sid, hello.DeviceID, hello.Claims)
 	logger.Infof("session %s opened (device=%s)", sid, hello.DeviceID)
 	// The control stream stays open for the lifetime of the session;
 	// keep it parked in a goroutine so the smux session does not close it.
@@ -473,6 +534,10 @@ func (s *Server) dispatch(stream *smux.Stream, req ConnectRequest) {
 	addr := net.JoinHostPort(req.Addr, strconv.Itoa(req.Port))
 	logger.Infof("sid=%d connect %s", stream.ID(), addr)
 
+	s.sessMu.RLock()
+	sid := s.sessionID
+	s.sessMu.RUnlock()
+
 	dialStart := time.Now()
 	conn, err := s.dial(req)
 	dialElapsed := time.Since(dialStart)
@@ -489,11 +554,26 @@ func (s *Server) dispatch(stream *smux.Stream, req ConnectRequest) {
 		return
 	}
 
+	var bytesOut uint64
+	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(stream, conn)
+		n, _ := io.Copy(stream, conn)
+		if n > 0 {
+			bytesOut = uint64(n) //nolint:gosec // io.Copy returns non-negative int64
+		}
 		_ = stream.Close()
+		close(done)
 	}()
-	_, _ = io.Copy(conn, stream)
+	in, _ := io.Copy(conn, stream)
+	_ = conn.Close()
+	<-done
+	bytesIn := uint64(0)
+	if in > 0 {
+		bytesIn = uint64(in) //nolint:gosec // io.Copy returns non-negative int64
+	}
+	if s.onTraffic != nil {
+		s.onTraffic(sid, addr, bytesIn, bytesOut)
+	}
 }
 
 func (s *Server) dial(req ConnectRequest) (net.Conn, error) {
