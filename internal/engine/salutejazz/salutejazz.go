@@ -54,6 +54,8 @@ var (
 	ErrPublisherNotInitialized = errors.New("publisher peer connection not initialized")
 	// ErrSubscriberMediaTimeout is returned when the subscriber media is not ready in time.
 	ErrSubscriberMediaTimeout = errors.New("subscriber media timeout")
+	// ErrPublisherMediaTimeout is returned when the publisher media is not ready in time.
+	ErrPublisherMediaTimeout = errors.New("publisher media timeout")
 	// ErrDataChannelTimeout is returned when the data channel fails to open in time.
 	ErrDataChannelTimeout = errors.New("datachannel timeout")
 	// ErrDataChannelNotReady is returned when send is called before the data channel is open.
@@ -297,6 +299,18 @@ func (s *Session) waitForMediaReady(ctx context.Context, timeout time.Duration) 
 	case <-s.subscriberConn:
 	case <-timer.C:
 		return ErrSubscriberMediaTimeout
+	case <-ctx.Done():
+		return fmt.Errorf("connect cancelled: %w", ctx.Err())
+	}
+
+	if !s.hasLocalVideoTracks() {
+		return nil
+	}
+
+	select {
+	case <-s.publisherConn:
+	case <-timer.C:
+		return ErrPublisherMediaTimeout
 	case <-ctx.Done():
 		return fmt.Errorf("connect cancelled: %w", ctx.Err())
 	}
