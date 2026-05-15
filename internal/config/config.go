@@ -43,6 +43,7 @@ type File struct {
 	SEI       SEI       `yaml:"sei"`
 	Liveness  Liveness  `yaml:"liveness"`
 	Lifecycle Lifecycle `yaml:"lifecycle"`
+	Traffic   Traffic   `yaml:"traffic"`
 	Gen       Gen       `yaml:"gen"`
 	Profiles  []Profile `yaml:"profiles"`
 	Failover  Failover  `yaml:"failover"`
@@ -66,6 +67,7 @@ type Profile struct {
 	SEI       SEI       `yaml:"sei"`
 	Liveness  Liveness  `yaml:"liveness"`
 	Lifecycle Lifecycle `yaml:"lifecycle"`
+	Traffic   Traffic   `yaml:"traffic"`
 }
 
 // Failover controls ordered profile failover.
@@ -151,6 +153,13 @@ type Liveness struct {
 // Lifecycle controls planned session rebuilds.
 type Lifecycle struct {
 	MaxSessionDuration string `yaml:"max_session_duration"`
+}
+
+// Traffic controls optional reliability-oriented send shaping.
+type Traffic struct {
+	MaxPayloadSize int    `yaml:"max_payload_size"`
+	MinDelay       string `yaml:"min_delay"`
+	MaxDelay       string `yaml:"max_delay"`
 }
 
 // Gen controls room-generation mode.
@@ -268,6 +277,9 @@ func Apply(dst session.Config, f File) session.Config {
 	dst.LivenessTimeout = pickString(dst.LivenessTimeout, f.Liveness.Timeout)
 	dst.LivenessFailures = pickInt(dst.LivenessFailures, f.Liveness.Failures)
 	dst.MaxSessionDuration = pickString(dst.MaxSessionDuration, f.Lifecycle.MaxSessionDuration)
+	dst.TrafficMaxPayloadSize = pickInt(dst.TrafficMaxPayloadSize, f.Traffic.MaxPayloadSize)
+	dst.TrafficMinDelay = pickString(dst.TrafficMinDelay, f.Traffic.MinDelay)
+	dst.TrafficMaxDelay = pickString(dst.TrafficMaxDelay, f.Traffic.MaxDelay)
 	dst.Amount = pickInt(dst.Amount, f.Gen.Amount)
 	return dst
 }
@@ -310,6 +322,9 @@ func ApplyProfile(base session.Config, p Profile) session.Config {
 	dst.LivenessTimeout = overlayString(dst.LivenessTimeout, p.Liveness.Timeout)
 	dst.LivenessFailures = overlayInt(dst.LivenessFailures, p.Liveness.Failures)
 	dst.MaxSessionDuration = overlayString(dst.MaxSessionDuration, p.Lifecycle.MaxSessionDuration)
+	dst.TrafficMaxPayloadSize = overlayInt(dst.TrafficMaxPayloadSize, p.Traffic.MaxPayloadSize)
+	dst.TrafficMinDelay = overlayString(dst.TrafficMinDelay, p.Traffic.MinDelay)
+	dst.TrafficMaxDelay = overlayString(dst.TrafficMaxDelay, p.Traffic.MaxDelay)
 	return dst
 }
 

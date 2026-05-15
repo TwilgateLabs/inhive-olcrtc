@@ -73,6 +73,8 @@ Important fields:
 | `socks.*` | SOCKS fields | Client listener and optional server egress proxy. |
 | `engine.*` | direct engine fields | Used only with `auth.provider: none`. |
 | `liveness.*` | control liveness | Ping/pong interval, timeout, and missed-pong threshold. |
+| `lifecycle.*` | session lifecycle | Planned call/session rotation. |
+| `traffic.*` | send shaping | Encrypted wire-message size cap and optional pacing jitter. |
 
 `internal/app/session` is the main router:
 
@@ -306,6 +308,7 @@ Implemented:
 - Profile start/end logs.
 - Planned session rotation with `lifecycle.max_session_duration`.
 - Shared supervisor status snapshots with bounded failover history.
+- Shared traffic wrapper with payload cap, pacing jitter, and smux frame sizing.
 
 Still valuable:
 
@@ -371,6 +374,8 @@ This mostly belongs in `pkg/olcrtc/tunnel` and `internal/server`.
 
 Provider APIs can drift. Worth adding:
 
+- Central protected HTTP/WebSocket client creation with TLS 1.2+,
+  environment proxy support, HTTP/2 for HTTP, and bounded timeouts.
 - Better typed errors from auth providers.
 - Provider health probes.
 - Fixture-based contract tests for API response changes.

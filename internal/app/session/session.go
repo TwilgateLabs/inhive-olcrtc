@@ -15,6 +15,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/carrier/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/client"
 	"github.com/openlibrecommunity/olcrtc/internal/control"
+	"github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/link"
 	"github.com/openlibrecommunity/olcrtc/internal/link/direct"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
@@ -137,47 +138,59 @@ var (
 	// ErrLifecycleMaxSessionDurationInvalid indicates that lifecycle.max_session_duration is not a positive duration.
 	ErrLifecycleMaxSessionDurationInvalid = errors.New(
 		"invalid max session duration (set lifecycle.max_session_duration to a duration > 0)")
+	// ErrTrafficMaxPayloadSizeInvalid indicates that traffic.max_payload_size is not valid.
+	ErrTrafficMaxPayloadSizeInvalid = errors.New(
+		"invalid traffic max payload size (set traffic.max_payload_size to 0 or a value above crypto overhead)")
+	// ErrTrafficMinDelayInvalid indicates that traffic.min_delay is not a non-negative duration.
+	ErrTrafficMinDelayInvalid = errors.New(
+		"invalid traffic min delay (set traffic.min_delay to a duration >= 0)")
+	// ErrTrafficMaxDelayInvalid indicates that traffic.max_delay is not a non-negative duration.
+	ErrTrafficMaxDelayInvalid = errors.New(
+		"invalid traffic max delay (set traffic.max_delay to a duration >= 0 and >= traffic.min_delay)")
 )
 
 // Config holds runtime session settings.
 type Config struct {
-	Mode               string
-	Link               string
-	Transport          string
-	Auth               string
-	Engine             string
-	URL                string
-	Token              string
-	RoomID             string
-	KeyHex             string
-	SOCKSHost          string
-	SOCKSPort          int
-	SOCKSUser          string
-	SOCKSPass          string
-	DNSServer          string
-	SOCKSProxyAddr     string
-	SOCKSProxyPort     int
-	VideoWidth         int
-	VideoHeight        int
-	VideoFPS           int
-	VideoBitrate       string
-	VideoHW            string
-	VideoQRSize        int
-	VideoQRRecovery    string
-	VideoCodec         string
-	VideoTileModule    int
-	VideoTileRS        int
-	VP8FPS             int
-	VP8BatchSize       int
-	SEIFPS             int
-	SEIBatchSize       int
-	SEIFragmentSize    int
-	SEIAckTimeoutMS    int
-	LivenessInterval   string
-	LivenessTimeout    string
-	LivenessFailures   int
-	MaxSessionDuration string
-	Amount             int
+	Mode                  string
+	Link                  string
+	Transport             string
+	Auth                  string
+	Engine                string
+	URL                   string
+	Token                 string
+	RoomID                string
+	KeyHex                string
+	SOCKSHost             string
+	SOCKSPort             int
+	SOCKSUser             string
+	SOCKSPass             string
+	DNSServer             string
+	SOCKSProxyAddr        string
+	SOCKSProxyPort        int
+	VideoWidth            int
+	VideoHeight           int
+	VideoFPS              int
+	VideoBitrate          string
+	VideoHW               string
+	VideoQRSize           int
+	VideoQRRecovery       string
+	VideoCodec            string
+	VideoTileModule       int
+	VideoTileRS           int
+	VP8FPS                int
+	VP8BatchSize          int
+	SEIFPS                int
+	SEIBatchSize          int
+	SEIFragmentSize       int
+	SEIAckTimeoutMS       int
+	LivenessInterval      string
+	LivenessTimeout       string
+	LivenessFailures      int
+	MaxSessionDuration    string
+	TrafficMaxPayloadSize int
+	TrafficMinDelay       string
+	TrafficMaxDelay       string
+	Amount                int
 }
 
 // RegisterDefaults registers built-in carriers and transports.
@@ -331,6 +344,9 @@ func Validate(cfg Config) error {
 		return err
 	}
 	if err := validateLifecycleConfig(cfg); err != nil {
+		return err
+	}
+	if err := validateTrafficConfig(cfg); err != nil {
 		return err
 	}
 	return validateModeConfig(cfg)
@@ -539,6 +555,48 @@ func maxSessionDuration(cfg Config) (time.Duration, error) {
 	return d, nil
 }
 
+func validateTrafficConfig(cfg Config) error {
+	_, err := trafficConfig(cfg)
+	return err
+}
+
+func trafficConfig(cfg Config) (transport.TrafficConfig, error) {
+	if cfg.TrafficMaxPayloadSize < 0 || (cfg.TrafficMaxPayloadSize > 0 &&
+		cfg.TrafficMaxPayloadSize <= crypto.WireOverhead) {
+		return transport.TrafficConfig{}, ErrTrafficMaxPayloadSizeInvalid
+	}
+	minDelay, err := parseOptionalNonNegativeDuration(cfg.TrafficMinDelay)
+	if err != nil {
+		return transport.TrafficConfig{}, fmt.Errorf("%w: %v", ErrTrafficMinDelayInvalid, err)
+	}
+	maxDelay, err := parseOptionalNonNegativeDuration(cfg.TrafficMaxDelay)
+	if err != nil {
+		return transport.TrafficConfig{}, fmt.Errorf("%w: %v", ErrTrafficMaxDelayInvalid, err)
+	}
+	if maxDelay > 0 && maxDelay < minDelay {
+		return transport.TrafficConfig{}, ErrTrafficMaxDelayInvalid
+	}
+	return transport.TrafficConfig{
+		MaxPayloadSize: cfg.TrafficMaxPayloadSize,
+		MinDelay:       minDelay,
+		MaxDelay:       maxDelay,
+	}, nil
+}
+
+func parseOptionalNonNegativeDuration(value string) (time.Duration, error) {
+	if value == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("duration must be >= 0")
+	}
+	return d, nil
+}
+
 func isLoopbackListenHost(host string) bool {
 	if host == "localhost" {
 		return true
@@ -560,9 +618,13 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	traffic, err := trafficConfig(cfg)
+	if err != nil {
+		return err
+	}
 
 	run := func(ctx context.Context) error {
-		return runOnce(ctx, cfg, roomURL, liveness)
+		return runOnce(ctx, cfg, roomURL, liveness, traffic)
 	}
 	if maxDuration > 0 {
 		return runWithSessionRotation(ctx, maxDuration, run)
@@ -570,7 +632,13 @@ func Run(ctx context.Context, cfg Config) error {
 	return run(ctx)
 }
 
-func runOnce(ctx context.Context, cfg Config, roomURL string, liveness control.Config) error {
+func runOnce(
+	ctx context.Context,
+	cfg Config,
+	roomURL string,
+	liveness control.Config,
+	traffic transport.TrafficConfig,
+) error {
 	switch cfg.Mode {
 	case modeSRV:
 		if err := server.Run(ctx, server.Config{
@@ -602,6 +670,7 @@ func runOnce(ctx context.Context, cfg Config, roomURL string, liveness control.C
 			URL:             cfg.URL,
 			Token:           cfg.Token,
 			Liveness:        liveness,
+			Traffic:         traffic,
 			OnSessionOpen: func(sessionID, deviceID string, claims map[string]any) {
 				logger.Infof("session opened: id=%s device=%s claims=%v", sessionID, deviceID, claims)
 			},
@@ -646,6 +715,7 @@ func runOnce(ctx context.Context, cfg Config, roomURL string, liveness control.C
 			URL:             cfg.URL,
 			Token:           cfg.Token,
 			Liveness:        liveness,
+			Traffic:         traffic,
 		}); err != nil {
 			return fmt.Errorf("client: %w", err)
 		}

@@ -43,6 +43,7 @@ func New(ctx context.Context, cfg link.Config) (link.Link, error) {
 		SEIBatchSize:    cfg.SEIBatchSize,
 		SEIFragmentSize: cfg.SEIFragmentSize,
 		SEIAckTimeoutMS: cfg.SEIAckTimeoutMS,
+		Traffic:         cfg.Traffic,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create transport for direct link: %w", err)
@@ -79,3 +80,6 @@ func (d *directLink) WatchConnection(ctx context.Context) {
 	d.transport.WatchConnection(ctx)
 }
 func (d *directLink) CanSend() bool { return d.transport.CanSend() }
+
+// Features reports the direct link's underlying transport capabilities.
+func (d *directLink) Features() link.Features { return d.transport.Features() }

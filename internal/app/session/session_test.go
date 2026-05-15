@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/control"
+	"github.com/openlibrecommunity/olcrtc/internal/crypto"
 )
 
 func TestApplyTransportDefaults(t *testing.T) {
@@ -521,6 +522,62 @@ func TestValidate(t *testing.T) {
 				return cfg
 			}(),
 			want: ErrLifecycleMaxSessionDurationInvalid,
+		},
+		{
+			name: "traffic accepts shaping",
+			cfg: func() Config {
+				cfg := base
+				cfg.TrafficMaxPayloadSize = 4096
+				cfg.TrafficMinDelay = "5ms"
+				cfg.TrafficMaxDelay = "30ms"
+				return cfg
+			}(),
+		},
+		{
+			name: "traffic rejects negative max payload",
+			cfg: func() Config {
+				cfg := base
+				cfg.TrafficMaxPayloadSize = -1
+				return cfg
+			}(),
+			want: ErrTrafficMaxPayloadSizeInvalid,
+		},
+		{
+			name: "traffic rejects payload smaller than crypto overhead",
+			cfg: func() Config {
+				cfg := base
+				cfg.TrafficMaxPayloadSize = crypto.WireOverhead
+				return cfg
+			}(),
+			want: ErrTrafficMaxPayloadSizeInvalid,
+		},
+		{
+			name: "traffic rejects bad min delay",
+			cfg: func() Config {
+				cfg := base
+				cfg.TrafficMinDelay = "nope"
+				return cfg
+			}(),
+			want: ErrTrafficMinDelayInvalid,
+		},
+		{
+			name: "traffic rejects negative max delay",
+			cfg: func() Config {
+				cfg := base
+				cfg.TrafficMaxDelay = "-1ms"
+				return cfg
+			}(),
+			want: ErrTrafficMaxDelayInvalid,
+		},
+		{
+			name: "traffic rejects max delay below min delay",
+			cfg: func() Config {
+				cfg := base
+				cfg.TrafficMinDelay = "30ms"
+				cfg.TrafficMaxDelay = "5ms"
+				return cfg
+			}(),
+			want: ErrTrafficMaxDelayInvalid,
 		},
 	}
 

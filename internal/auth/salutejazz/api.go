@@ -9,9 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/openlibrecommunity/olcrtc/internal/protect"
@@ -122,7 +120,7 @@ func createMeeting(ctx context.Context, headers map[string]string) (*createRespo
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, statusError(errCreateRoomFailed, resp)
+		return nil, protect.StatusError(errCreateRoomFailed, resp, 1024)
 	}
 
 	var res createResponse
@@ -174,7 +172,7 @@ func preconnect(ctx context.Context, roomID, password string, headers map[string
 	defer func() { _ = preResp.Body.Close() }()
 
 	if preResp.StatusCode != http.StatusOK {
-		return "", statusError(errPreconnectFailed, preResp)
+		return "", protect.StatusError(errPreconnectFailed, preResp, 1024)
 	}
 
 	var preconnectResp struct {
@@ -184,15 +182,6 @@ func preconnect(ctx context.Context, roomID, password string, headers map[string
 		return "", fmt.Errorf("decode preconnect response: %w", err)
 	}
 	return preconnectResp.ConnectorURL, nil
-}
-
-func statusError(base error, resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	bodyText := strings.TrimSpace(string(body))
-	if bodyText == "" {
-		return fmt.Errorf("%w: status %d", base, resp.StatusCode)
-	}
-	return fmt.Errorf("%w: status %d: %s", base, resp.StatusCode, bodyText)
 }
 
 func joinRoom(ctx context.Context, roomID, password string) (*roomInfo, error) {

@@ -79,12 +79,14 @@ func TestNewForwardsConfigAndMethods(t *testing.T) {
 		VideoTileRS:     20,
 		VP8FPS:          25,
 		VP8BatchSize:    8,
+		Traffic:         transport.TrafficConfig{MaxPayloadSize: 4096},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if seen.DeviceID != "client" || seen.ProxyPort != 1080 || seen.VideoTileRS != 20 || seen.VP8BatchSize != 8 {
+	if seen.DeviceID != "client" || seen.ProxyPort != 1080 || seen.VideoTileRS != 20 || seen.VP8BatchSize != 8 ||
+		seen.Traffic.MaxPayloadSize != 4096 {
 		t.Fatalf("forwarded config = %+v", seen)
 	}
 
@@ -111,6 +113,9 @@ func TestNewForwardsConfigAndMethods(t *testing.T) {
 	}
 	if !ln.CanSend() {
 		t.Fatal("CanSend() = false, want true")
+	}
+	if features := ln.(link.FeaturesProvider).Features(); features.MaxPayloadSize != 4096 {
+		t.Fatalf("Features() = %+v, want shaped max payload 4096", features)
 	}
 }
 

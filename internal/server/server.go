@@ -21,6 +21,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/xtaci/smux"
 )
 
@@ -116,6 +117,7 @@ type Config struct {
 	URL             string
 	Token           string
 	Liveness        control.Config
+	Traffic         transport.TrafficConfig
 
 	// AuthHook is invoked after CLIENT_HELLO to authorize the client and
 	// return a session ID. If nil, every client is admitted with a random UUID.
@@ -234,16 +236,30 @@ func (s *Server) setupResolver() {
 
 // smuxConfig mirrors the client side. Both peers must agree on Version and
 // MaxFrameSize.
-func smuxConfig() *smux.Config {
+func smuxConfig(maxWirePayload ...int) *smux.Config {
 	cfg := smux.DefaultConfig()
 	cfg.Version = 2
 	cfg.KeepAliveDisabled = true
 	cfg.MaxFrameSize = 32768
+	if len(maxWirePayload) > 0 && maxWirePayload[0] > crypto.WireOverhead {
+		maxFrameSize := maxWirePayload[0] - crypto.WireOverhead
+		if maxFrameSize < cfg.MaxFrameSize {
+			cfg.MaxFrameSize = maxFrameSize
+		}
+	}
 	cfg.MaxReceiveBuffer = 16 * 1024 * 1024
 	cfg.MaxStreamBuffer = 1024 * 1024
 	cfg.KeepAliveInterval = 10 * time.Second
 	cfg.KeepAliveTimeout = 60 * time.Second
 	return cfg
+}
+
+func linkMaxPayload(ln link.Link) int {
+	provider, ok := ln.(link.FeaturesProvider)
+	if !ok {
+		return 0
+	}
+	return provider.Features().MaxPayloadSize
 }
 
 func (s *Server) bringUpLink(
@@ -280,6 +296,7 @@ func (s *Server) bringUpLink(
 		SEIBatchSize:    cfg.SEIBatchSize,
 		SEIFragmentSize: cfg.SEIFragmentSize,
 		SEIAckTimeoutMS: cfg.SEIAckTimeoutMS,
+		Traffic:         cfg.Traffic,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create link: %w", err)
@@ -316,7 +333,7 @@ func (s *Server) bringUpLink(
 
 func (s *Server) installSession() {
 	conn := muxconn.New(s.ln, s.cipher)
-	sess, err := smux.Server(conn, smuxConfig())
+	sess, err := smux.Server(conn, smuxConfig(linkMaxPayload(s.ln)))
 	if err != nil {
 		logger.Warnf("smux server init failed: %v", err)
 		return
@@ -342,7 +359,7 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 
 	// Pre-build the replacement so we can swap atomically below.
 	newConn := muxconn.New(s.ln, s.cipher)
-	newSess, err := smux.Server(newConn, smuxConfig())
+	newSess, err := smux.Server(newConn, smuxConfig(linkMaxPayload(s.ln)))
 	if err != nil {
 		logger.Warnf("smux server init failed: %v", err)
 		_ = newConn.Close()

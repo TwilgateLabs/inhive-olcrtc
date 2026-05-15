@@ -35,6 +35,8 @@ olcrtc /etc/olcrtc/server.yaml
 | `liveness.timeout`                                               | pong timeout, default `5s`                                |
 | `liveness.failures`                                              | missed pongs before reconnect, default `3`                |
 | `lifecycle.max_session_duration`                                 | planned session rebuild interval, e.g. `6h`; unset = off  |
+| `traffic.max_payload_size`                                       | safe encrypted wire-message cap; `0` = transport default  |
+| `traffic.min_delay` / `.max_delay`                               | optional send pacing jitter, e.g. `5ms` / `30ms`          |
 | `gen.amount`                                                     | gen mode: number of rooms to create                       |
 | `profiles[]`                                                     | ordered srv/cnc failover profiles                         |
 | `failover.retry_delay`                                           | delay before trying the next profile, e.g. `2s`           |
@@ -85,6 +87,27 @@ lifecycle:
 
 The field is optional and disabled when omitted. Values use Go duration syntax
 such as `30m`, `2h`, or `6h`; zero and negative durations are rejected.
+
+## Traffic Shaping
+
+`traffic` applies a shared reliability-oriented wrapper around the selected
+transport. It can cap encrypted wire-message size and add small send pacing
+delays without truncating data. When a payload would exceed the effective cap,
+the send fails clearly instead of cutting bytes and corrupting smux.
+
+```yaml
+traffic:
+  max_payload_size: 4096
+  min_delay: 5ms
+  max_delay: 30ms
+```
+
+The wrapper clamps the configured payload cap to the selected transport's
+advertised `MaxPayloadSize`. Client and server also reduce smux frame size to
+fit the effective encrypted payload cap, accounting for crypto overhead. `0`
+adds no extra cap beyond the selected transport's advertised limit. Delays use
+Go duration syntax; if only `min_delay` is set, it is a fixed delay. Use the
+same traffic settings on both peers.
 
 ## Failover Profiles
 

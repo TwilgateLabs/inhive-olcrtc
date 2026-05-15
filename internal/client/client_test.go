@@ -49,6 +49,11 @@ func TestSmuxConfig(t *testing.T) {
 	if cfg.Version != 2 || !cfg.KeepAliveDisabled || cfg.MaxFrameSize != 32768 || cfg.MaxReceiveBuffer != 16*1024*1024 {
 		t.Fatalf("smuxConfig() = %+v", cfg)
 	}
+	capped := smuxConfig(4096)
+	if capped.MaxFrameSize != 4096-cryptopkg.WireOverhead {
+		t.Fatalf("smuxConfig(4096).MaxFrameSize = %d, want %d",
+			capped.MaxFrameSize, 4096-cryptopkg.WireOverhead)
+	}
 }
 
 func TestSocks5Handshake(t *testing.T) {

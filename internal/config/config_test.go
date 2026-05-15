@@ -45,6 +45,10 @@ liveness:
   failures: 4
 lifecycle:
   max_session_duration: 6h
+traffic:
+  max_payload_size: 4096
+  min_delay: 5ms
+  max_delay: 30ms
 gen:
   amount: 3
 debug: true
@@ -82,24 +86,27 @@ func requireLoadedFile(t *testing.T, f File) {
 func requireAppliedConfig(t *testing.T, got session.Config) {
 	t.Helper()
 	want := session.Config{
-		Mode:               testModeSrv,
-		Link:               "direct",
-		Auth:               testAuthProvider,
-		RoomID:             testRoomID,
-		KeyHex:             testCryptoKey,
-		Transport:          "datachannel",
-		DNSServer:          "1.1.1.1:53",
-		SOCKSHost:          "127.0.0.1",
-		SOCKSPort:          1080,
-		SOCKSUser:          "u",
-		SOCKSPass:          "p",
-		VP8FPS:             25,
-		VP8BatchSize:       4,
-		LivenessInterval:   "2s",
-		LivenessTimeout:    "500ms",
-		LivenessFailures:   4,
-		MaxSessionDuration: "6h",
-		Amount:             3,
+		Mode:                  testModeSrv,
+		Link:                  "direct",
+		Auth:                  testAuthProvider,
+		RoomID:                testRoomID,
+		KeyHex:                testCryptoKey,
+		Transport:             "datachannel",
+		DNSServer:             "1.1.1.1:53",
+		SOCKSHost:             "127.0.0.1",
+		SOCKSPort:             1080,
+		SOCKSUser:             "u",
+		SOCKSPass:             "p",
+		VP8FPS:                25,
+		VP8BatchSize:          4,
+		LivenessInterval:      "2s",
+		LivenessTimeout:       "500ms",
+		LivenessFailures:      4,
+		MaxSessionDuration:    "6h",
+		TrafficMaxPayloadSize: 4096,
+		TrafficMinDelay:       "5ms",
+		TrafficMaxDelay:       "30ms",
+		Amount:                3,
 	}
 	if got != want {
 		t.Fatalf("Apply produced wrong config: %+v, want %+v", got, want)
@@ -148,6 +155,10 @@ liveness:
   failures: 5
 lifecycle:
   max_session_duration: 6h
+traffic:
+  max_payload_size: 8192
+  min_delay: 10ms
+  max_delay: 40ms
 profiles:
   - name: wb-vp8
     auth:
@@ -162,6 +173,9 @@ profiles:
       interval: 1s
     lifecycle:
       max_session_duration: 30m
+    traffic:
+      max_payload_size: 4096
+      max_delay: 20ms
   - name: jitsi-dc
     auth:
       provider: jitsi
@@ -196,7 +210,8 @@ failover:
 	}
 	if first.KeyHex != "shared-key" || first.DNSServer != "1.1.1.1:53" || first.VP8FPS != 30 ||
 		first.LivenessInterval != "1s" || first.LivenessTimeout != "2s" || first.LivenessFailures != 5 ||
-		first.MaxSessionDuration != "30m" {
+		first.MaxSessionDuration != "30m" || first.TrafficMaxPayloadSize != 4096 ||
+		first.TrafficMinDelay != "10ms" || first.TrafficMaxDelay != "20ms" {
 		t.Fatalf("first inherited/overlaid fields = %+v", first)
 	}
 	second := ApplyProfile(base, f.Profiles[1])
@@ -205,7 +220,8 @@ failover:
 		t.Fatalf("second profile = %+v", second)
 	}
 	if second.LivenessInterval != "5s" || second.LivenessTimeout != "2s" || second.LivenessFailures != 5 ||
-		second.MaxSessionDuration != "6h" {
+		second.MaxSessionDuration != "6h" || second.TrafficMaxPayloadSize != 8192 ||
+		second.TrafficMinDelay != "10ms" || second.TrafficMaxDelay != "40ms" {
 		t.Fatalf("second lifecycle/liveness fields = %+v", second)
 	}
 }

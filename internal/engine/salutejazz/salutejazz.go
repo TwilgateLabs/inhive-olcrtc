@@ -417,10 +417,7 @@ func (s *Session) waitForMediaReady(ctx context.Context, timeout time.Duration) 
 }
 
 func (s *Session) dialWebSocket() error {
-	wsDialer := websocket.Dialer{
-		NetDialContext:   protect.DialContext,
-		HandshakeTimeout: wsHandshakeTimeout,
-	}
+	wsDialer := protect.NewWebSocketDialer(wsHandshakeTimeout)
 
 	ws, resp, err := wsDialer.Dial(s.connectorURL, nil)
 	if err != nil {

@@ -4,6 +4,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var (
@@ -32,10 +33,17 @@ type Transport interface {
 	Features() Features
 }
 
+// TrafficConfig controls optional reliability-oriented send shaping.
+type TrafficConfig struct {
+	MaxPayloadSize int
+	MinDelay       time.Duration
+	MaxDelay       time.Duration
+}
+
 // Config holds common transport configuration.
 type Config struct {
-	Carrier         string
-	RoomURL         string
+	Carrier string
+	RoomURL string
 	// Engine, URL, Token are forwarded to carrier.Config for the "none" auth
 	// carrier (direct engine access without a service-specific auth flow).
 	Engine          string
@@ -63,6 +71,7 @@ type Config struct {
 	SEIBatchSize    int
 	SEIFragmentSize int
 	SEIAckTimeoutMS int
+	Traffic         TrafficConfig
 }
 
 // Factory creates a transport instance.
@@ -81,7 +90,11 @@ func New(ctx context.Context, name string, cfg Config) (Transport, error) {
 	if !ok {
 		return nil, ErrTransportNotFound
 	}
-	return factory(ctx, cfg)
+	tr, err := factory(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return WithTraffic(tr, cfg.Traffic), nil
 }
 
 // Available returns a list of registered transport names.

@@ -112,10 +112,7 @@ func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
 }
 
 func (s *Session) dialWebSocket() error {
-	wsDialer := websocket.Dialer{
-		NetDialContext:   protect.DialContext,
-		HandshakeTimeout: wsHandshakeTimeout,
-	}
+	wsDialer := protect.NewWebSocketDialer(wsHandshakeTimeout)
 	ws, resp, err := wsDialer.Dial(s.mediaServerURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial ws: %w", err)

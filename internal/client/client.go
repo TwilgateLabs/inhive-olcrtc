@@ -24,6 +24,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/xtaci/smux"
 )
 
@@ -103,6 +104,7 @@ type Config struct {
 	URL             string
 	Token           string
 	Liveness        control.Config
+	Traffic         transport.TrafficConfig
 
 	// DeviceID overrides the persistent client-side device identifier. Leave
 	// empty to derive one from DeviceIDPath (or generate a random one if both
@@ -216,6 +218,7 @@ func (c *Client) bringUpLink(
 		SEIBatchSize:    cfg.SEIBatchSize,
 		SEIFragmentSize: cfg.SEIFragmentSize,
 		SEIAckTimeoutMS: cfg.SEIAckTimeoutMS,
+		Traffic:         cfg.Traffic,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create link: %w", err)
@@ -241,7 +244,7 @@ func (c *Client) bringUpLink(
 	}
 
 	c.conn = muxconn.New(ln, c.cipher)
-	sess, err := smux.Client(c.conn, smuxConfig())
+	sess, err := smux.Client(c.conn, smuxConfig(linkMaxPayload(ln)))
 	if err != nil {
 		return fmt.Errorf("smux client: %w", err)
 	}
@@ -332,16 +335,30 @@ func resolveDeviceID(deviceID, path string) (string, error) {
 }
 
 // smuxConfig returns the tuned smux config used on both ends.
-func smuxConfig() *smux.Config {
+func smuxConfig(maxWirePayload ...int) *smux.Config {
 	cfg := smux.DefaultConfig()
 	cfg.Version = 2
 	cfg.KeepAliveDisabled = true
 	cfg.MaxFrameSize = 32768
+	if len(maxWirePayload) > 0 && maxWirePayload[0] > crypto.WireOverhead {
+		maxFrameSize := maxWirePayload[0] - crypto.WireOverhead
+		if maxFrameSize < cfg.MaxFrameSize {
+			cfg.MaxFrameSize = maxFrameSize
+		}
+	}
 	cfg.MaxReceiveBuffer = 16 * 1024 * 1024
 	cfg.MaxStreamBuffer = 1024 * 1024
 	cfg.KeepAliveInterval = 10 * time.Second
 	cfg.KeepAliveTimeout = 60 * time.Second
 	return cfg
+}
+
+func linkMaxPayload(ln link.Link) int {
+	provider, ok := ln.(link.FeaturesProvider)
+	if !ok {
+		return 0
+	}
+	return provider.Features().MaxPayloadSize
 }
 
 func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context.CancelFunc, reason string) bool {
@@ -421,7 +438,7 @@ func (c *Client) tryReopenSession(
 		_ = old.Close()
 	}
 
-	sess, err := smux.Client(conn, smuxConfig())
+	sess, err := smux.Client(conn, smuxConfig(linkMaxPayload(c.ln)))
 	if err != nil {
 		logger.Warnf("smux re-init failed (attempt %d): %v", attempt, err)
 		return false

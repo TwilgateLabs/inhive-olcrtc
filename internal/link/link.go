@@ -4,6 +4,8 @@ package link
 import (
 	"context"
 	"errors"
+
+	"github.com/openlibrecommunity/olcrtc/internal/transport"
 )
 
 var (
@@ -23,11 +25,19 @@ type Link interface {
 	CanSend() bool
 }
 
+// Features mirrors the underlying transport capabilities when a link can expose them.
+type Features = transport.Features
+
+// FeaturesProvider is optionally implemented by links that can report wire limits.
+type FeaturesProvider interface {
+	Features() Features
+}
+
 // Config holds common link configuration.
 type Config struct {
-	Transport       string
-	Carrier         string
-	RoomURL         string
+	Transport string
+	Carrier   string
+	RoomURL   string
 	// Engine, URL, Token are forwarded for the "none" auth carrier.
 	Engine          string
 	URL             string
@@ -54,6 +64,7 @@ type Config struct {
 	SEIBatchSize    int
 	SEIFragmentSize int
 	SEIAckTimeoutMS int
+	Traffic         transport.TrafficConfig
 }
 
 // Factory creates a link instance.

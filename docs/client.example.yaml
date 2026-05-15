@@ -30,6 +30,12 @@ liveness:
 # lifecycle:
 #   max_session_duration: 6h
 
+# Optional reliability shaping for encrypted wire messages.
+# traffic:
+#   max_payload_size: 4096
+#   min_delay: 5ms
+#   max_delay: 30ms
+
 # Local SOCKS5 listener exposed to applications
 socks:
   host: "127.0.0.1"
