@@ -140,6 +140,7 @@ func runWithConfig(cfg loadedConfig) error {
 		return fmt.Errorf("validate config: %w", err)
 	}
 	scfg = session.ApplyTransportDefaults(scfg)
+	scfg = session.ApplyLivenessDefaults(scfg)
 
 	if scfg.Mode == modeGen {
 		if len(cfg.profiles) > 0 {
@@ -166,7 +167,7 @@ func prepareProfiles(profiles []supervisor.Profile) ([]supervisor.Profile, error
 		if err != nil {
 			return nil, fmt.Errorf("validate profile %q: %w", profile.Name, err)
 		}
-		profile.Config = session.ApplyTransportDefaults(scfg)
+		profile.Config = session.ApplyLivenessDefaults(session.ApplyTransportDefaults(scfg))
 		out = append(out, profile)
 	}
 	return out, nil

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
 	"github.com/openlibrecommunity/olcrtc/internal/link"
@@ -55,6 +56,7 @@ type Server struct {
 	cipher         *crypto.Cipher
 	conn           *muxconn.Conn
 	session        *smux.Session
+	controlStop    context.CancelFunc
 	sessMu         sync.RWMutex
 	reinstallMu    sync.Mutex
 	wg             sync.WaitGroup
@@ -68,6 +70,7 @@ type Server struct {
 	resolver       *net.Resolver
 	socksProxyAddr string
 	socksProxyPort int
+	liveness       control.Config
 }
 
 // ConnectRequest is a message from the client to establish a new connection.
@@ -106,6 +109,7 @@ type Config struct {
 	Engine          string
 	URL             string
 	Token           string
+	Liveness        control.Config
 
 	// AuthHook is invoked after CLIENT_HELLO to authorize the client and
 	// return a session ID. If nil, every client is admitted with a random UUID.
@@ -155,6 +159,7 @@ func Run(ctx context.Context, cfg Config) error {
 		dnsServer:      cfg.DNSServer,
 		socksProxyAddr: cfg.SOCKSProxyAddr,
 		socksProxyPort: cfg.SOCKSProxyPort,
+		liveness:       cfg.Liveness,
 	}
 	s.setupResolver()
 
@@ -340,13 +345,18 @@ func (s *Server) reinstallSession(dead *smux.Session) {
 	}
 	oldSess := s.session
 	oldConn := s.conn
+	oldControlStop := s.controlStop
 	oldSID := s.sessionID
 	s.session = newSess
 	s.conn = newConn
+	s.controlStop = nil
 	s.sessionID = ""
 	s.deviceID = ""
 	s.sessMu.Unlock()
 
+	if oldControlStop != nil {
+		oldControlStop()
+	}
 	if oldSess != nil {
 		_ = oldSess.Close()
 	}
@@ -362,13 +372,18 @@ func (s *Server) closeSession() {
 	s.sessMu.Lock()
 	sess := s.session
 	conn := s.conn
+	controlStop := s.controlStop
 	s.session = nil
 	s.conn = nil
+	s.controlStop = nil
 	oldSID := s.sessionID
 	s.sessionID = ""
 	s.deviceID = ""
 	s.sessMu.Unlock()
 
+	if controlStop != nil {
+		controlStop()
+	}
 	if conn != nil {
 		_ = conn.Close()
 	}
@@ -478,26 +493,48 @@ func (s *Server) acceptHandshake(ctx context.Context, sess *smux.Session) bool {
 	s.sessMu.Unlock()
 	s.onOpen(sid, hello.DeviceID, hello.Claims)
 	logger.Infof("session %s opened (device=%s)", sid, hello.DeviceID)
-	// The control stream stays open for the lifetime of the session;
-	// keep it parked in a goroutine so the smux session does not close it.
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.parkControlStream(stream)
-	}()
+	s.startControlLoop(ctx, sess, stream)
 	return true
 }
 
-// parkControlStream blocks reading from the control stream until it closes.
-// Future control messages (kick, rate updates, etc.) would be dispatched here.
-func (s *Server) parkControlStream(stream *smux.Stream) {
-	defer func() { _ = stream.Close() }()
-	buf := make([]byte, 64)
-	for {
-		if _, err := stream.Read(buf); err != nil {
-			return
+func (s *Server) startControlLoop(ctx context.Context, sess *smux.Session, stream *smux.Stream) {
+	controlCtx, stop := context.WithCancel(ctx)
+	s.sessMu.Lock()
+	s.controlStop = stop
+	s.sessMu.Unlock()
+
+	liveness := s.liveness
+	onPong := liveness.OnPong
+	onUnhealthy := liveness.OnUnhealthy
+	liveness.OnPong = func(h control.Health) {
+		s.sessMu.RLock()
+		sid := s.sessionID
+		s.sessMu.RUnlock()
+		logger.Debugf("control alive session=%s rtt=%v seq=%d", sid, h.RTT, h.Seq)
+		if onPong != nil {
+			onPong(h)
 		}
 	}
+	liveness.OnUnhealthy = func(missed int) {
+		logger.Warnf("control stream unhealthy on server: missed_pongs=%d", missed)
+		if onUnhealthy != nil {
+			onUnhealthy(missed)
+		}
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() { _ = stream.Close() }()
+		err := control.Run(controlCtx, stream, liveness)
+		if controlCtx.Err() != nil || ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			logger.Warnf("server control stream ended: %v", err)
+		}
+		s.reinstallSession(sess)
+	}()
 }
 
 func (s *Server) shutdown() {

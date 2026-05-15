@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	cryptopkg "github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/xtaci/smux"
@@ -515,5 +516,72 @@ func TestShutdownClosesLinkAndConn(t *testing.T) {
 	c.shutdown()
 	if !ln.closed {
 		t.Fatal("shutdown() did not close link")
+	}
+}
+
+func TestStartControlLoopReportsPong(t *testing.T) {
+	a, b := net.Pipe()
+	defer func() {
+		_ = a.Close()
+		_ = b.Close()
+	}()
+
+	serverSess, err := smux.Server(a, smuxConfig())
+	if err != nil {
+		t.Fatalf("smux.Server() error = %v", err)
+	}
+	defer func() { _ = serverSess.Close() }()
+	clientSess, err := smux.Client(b, smuxConfig())
+	if err != nil {
+		t.Fatalf("smux.Client() error = %v", err)
+	}
+	defer func() { _ = clientSess.Close() }()
+
+	peerStreamCh := make(chan *smux.Stream, 1)
+	go func() {
+		stream, err := serverSess.AcceptStream()
+		if err == nil {
+			peerStreamCh <- stream
+		}
+	}()
+
+	stream, err := clientSess.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream() error = %v", err)
+	}
+	peerStream := <-peerStreamCh
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan control.Health, 1)
+	c := &Client{sessionID: "sid-control"}
+	c.startControlLoop(ctx, Config{
+		Liveness: control.Config{
+			Interval: 10 * time.Millisecond,
+			Timeout:  100 * time.Millisecond,
+			Failures: 2,
+			OnPong: func(h control.Health) {
+				select {
+				case got <- h:
+				default:
+				}
+			},
+		},
+	}, cancel, stream)
+	go func() {
+		_ = control.Run(ctx, peerStream, control.Config{
+			Interval: 10 * time.Millisecond,
+			Timeout:  100 * time.Millisecond,
+			Failures: 2,
+		})
+	}()
+
+	select {
+	case h := <-got:
+		if h.Seq == 0 {
+			t.Fatal("Health.Seq = 0")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for control pong")
 	}
 }

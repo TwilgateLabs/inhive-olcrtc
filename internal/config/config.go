@@ -41,6 +41,7 @@ type File struct {
 	Video    Video     `yaml:"video"`
 	VP8      VP8       `yaml:"vp8"`
 	SEI      SEI       `yaml:"sei"`
+	Liveness Liveness  `yaml:"liveness"`
 	Gen      Gen       `yaml:"gen"`
 	Profiles []Profile `yaml:"profiles"`
 	Failover Failover  `yaml:"failover"`
@@ -51,17 +52,18 @@ type File struct {
 
 // Profile is a failover entry that overrides top-level runtime fields.
 type Profile struct {
-	Name   string `yaml:"name"`
-	Link   string `yaml:"link"`
-	Auth   Auth   `yaml:"auth"`
-	Room   Room   `yaml:"room"`
-	Crypto Crypto `yaml:"crypto"`
-	Net    Net    `yaml:"net"`
-	SOCKS  SOCKS  `yaml:"socks"`
-	Engine Engine `yaml:"engine"`
-	Video  Video  `yaml:"video"`
-	VP8    VP8    `yaml:"vp8"`
-	SEI    SEI    `yaml:"sei"`
+	Name     string   `yaml:"name"`
+	Link     string   `yaml:"link"`
+	Auth     Auth     `yaml:"auth"`
+	Room     Room     `yaml:"room"`
+	Crypto   Crypto   `yaml:"crypto"`
+	Net      Net      `yaml:"net"`
+	SOCKS    SOCKS    `yaml:"socks"`
+	Engine   Engine   `yaml:"engine"`
+	Video    Video    `yaml:"video"`
+	VP8      VP8      `yaml:"vp8"`
+	SEI      SEI      `yaml:"sei"`
+	Liveness Liveness `yaml:"liveness"`
 }
 
 // Failover controls ordered profile failover.
@@ -135,6 +137,13 @@ type SEI struct {
 	BatchSize    int `yaml:"batch_size"`
 	FragmentSize int `yaml:"fragment_size"`
 	AckTimeoutMS int `yaml:"ack_timeout_ms"`
+}
+
+// Liveness tunes the post-handshake control stream ping/pong checks.
+type Liveness struct {
+	Interval string `yaml:"interval"`
+	Timeout  string `yaml:"timeout"`
+	Failures int    `yaml:"failures"`
 }
 
 // Gen controls room-generation mode.
@@ -248,6 +257,9 @@ func Apply(dst session.Config, f File) session.Config {
 	dst.SEIBatchSize = pickInt(dst.SEIBatchSize, f.SEI.BatchSize)
 	dst.SEIFragmentSize = pickInt(dst.SEIFragmentSize, f.SEI.FragmentSize)
 	dst.SEIAckTimeoutMS = pickInt(dst.SEIAckTimeoutMS, f.SEI.AckTimeoutMS)
+	dst.LivenessInterval = pickString(dst.LivenessInterval, f.Liveness.Interval)
+	dst.LivenessTimeout = pickString(dst.LivenessTimeout, f.Liveness.Timeout)
+	dst.LivenessFailures = pickInt(dst.LivenessFailures, f.Liveness.Failures)
 	dst.Amount = pickInt(dst.Amount, f.Gen.Amount)
 	return dst
 }
@@ -286,6 +298,9 @@ func ApplyProfile(base session.Config, p Profile) session.Config {
 	dst.SEIBatchSize = overlayInt(dst.SEIBatchSize, p.SEI.BatchSize)
 	dst.SEIFragmentSize = overlayInt(dst.SEIFragmentSize, p.SEI.FragmentSize)
 	dst.SEIAckTimeoutMS = overlayInt(dst.SEIAckTimeoutMS, p.SEI.AckTimeoutMS)
+	dst.LivenessInterval = overlayString(dst.LivenessInterval, p.Liveness.Interval)
+	dst.LivenessTimeout = overlayString(dst.LivenessTimeout, p.Liveness.Timeout)
+	dst.LivenessFailures = overlayInt(dst.LivenessFailures, p.Liveness.Failures)
 	return dst
 }
 

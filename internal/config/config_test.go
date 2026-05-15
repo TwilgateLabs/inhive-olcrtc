@@ -39,6 +39,10 @@ socks:
 vp8:
   fps: 25
   batch_size: 4
+liveness:
+  interval: 2s
+  timeout: 500ms
+  failures: 4
 gen:
   amount: 3
 debug: true
@@ -76,20 +80,23 @@ func requireLoadedFile(t *testing.T, f File) {
 func requireAppliedConfig(t *testing.T, got session.Config) {
 	t.Helper()
 	want := session.Config{
-		Mode:         testModeSrv,
-		Link:         "direct",
-		Auth:         testAuthProvider,
-		RoomID:       testRoomID,
-		KeyHex:       testCryptoKey,
-		Transport:    "datachannel",
-		DNSServer:    "1.1.1.1:53",
-		SOCKSHost:    "127.0.0.1",
-		SOCKSPort:    1080,
-		SOCKSUser:    "u",
-		SOCKSPass:    "p",
-		VP8FPS:       25,
-		VP8BatchSize: 4,
-		Amount:       3,
+		Mode:             testModeSrv,
+		Link:             "direct",
+		Auth:             testAuthProvider,
+		RoomID:           testRoomID,
+		KeyHex:           testCryptoKey,
+		Transport:        "datachannel",
+		DNSServer:        "1.1.1.1:53",
+		SOCKSHost:        "127.0.0.1",
+		SOCKSPort:        1080,
+		SOCKSUser:        "u",
+		SOCKSPass:        "p",
+		VP8FPS:           25,
+		VP8BatchSize:     4,
+		LivenessInterval: "2s",
+		LivenessTimeout:  "500ms",
+		LivenessFailures: 4,
+		Amount:           3,
 	}
 	if got != want {
 		t.Fatalf("Apply produced wrong config: %+v, want %+v", got, want)
@@ -132,6 +139,10 @@ crypto:
   key: shared-key
 net:
   dns: 1.1.1.1:53
+liveness:
+  interval: 5s
+  timeout: 2s
+  failures: 5
 profiles:
   - name: wb-vp8
     auth:
@@ -142,6 +153,8 @@ profiles:
       transport: vp8channel
     vp8:
       fps: 30
+    liveness:
+      interval: 1s
   - name: jitsi-dc
     auth:
       provider: jitsi
@@ -174,13 +187,17 @@ failover:
 	if first.Auth != "wbstream" || first.Transport != "vp8channel" || first.RoomID != "wb-room" {
 		t.Fatalf("first profile = %+v", first)
 	}
-	if first.KeyHex != "shared-key" || first.DNSServer != "1.1.1.1:53" || first.VP8FPS != 30 {
+	if first.KeyHex != "shared-key" || first.DNSServer != "1.1.1.1:53" || first.VP8FPS != 30 ||
+		first.LivenessInterval != "1s" || first.LivenessTimeout != "2s" || first.LivenessFailures != 5 {
 		t.Fatalf("first inherited/overlaid fields = %+v", first)
 	}
 	second := ApplyProfile(base, f.Profiles[1])
 	if second.Auth != "jitsi" || second.Transport != "datachannel" ||
 		second.RoomID != "https://meet.example/room" || second.DNSServer != "8.8.8.8:53" {
 		t.Fatalf("second profile = %+v", second)
+	}
+	if second.LivenessInterval != "5s" || second.LivenessTimeout != "2s" || second.LivenessFailures != 5 {
+		t.Fatalf("second liveness fields = %+v", second)
 	}
 }
 

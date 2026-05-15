@@ -31,6 +31,9 @@ olcrtc /etc/olcrtc/server.yaml
 | `video.*`                                                        | videochannel tuning                                       |
 | `vp8.*`                                                          | vp8channel tuning                                         |
 | `sei.fps` / `.batch_size` / `.fragment_size` / `.ack_timeout_ms` | seichannel tuning                                         |
+| `liveness.interval`                                              | control-stream ping interval, default `10s`               |
+| `liveness.timeout`                                               | pong timeout, default `5s`                                |
+| `liveness.failures`                                              | missed pongs before reconnect, default `3`                |
 | `gen.amount`                                                     | gen mode: number of rooms to create                       |
 | `profiles[]`                                                     | ordered srv/cnc failover profiles                         |
 | `failover.retry_delay`                                           | delay before trying the next profile, e.g. `2s`           |
@@ -44,6 +47,25 @@ olcrtc /etc/olcrtc/server.yaml
 
 `crypto.key_file` is resolved relative to the YAML file. Do not set it
 together with `crypto.key`.
+
+## Liveness
+
+After `CLIENT_HELLO` / `SERVER_WELCOME`, the first smux stream stays open as
+an encrypted control stream. olcrtc now sends `CONTROL_PING` / `CONTROL_PONG`
+messages over that stream to prove the real tunnel path still round-trips.
+This detects states where a provider or WebRTC layer looks connected but the
+encrypted smux path is no longer usable.
+
+```yaml
+liveness:
+  interval: 10s
+  timeout: 5s
+  failures: 3
+```
+
+When the failure threshold is reached, the current smux session is rebuilt.
+In failover mode, a profile that exits after liveness-triggered reconnect
+failure lets the supervisor advance to the next profile.
 
 ## Failover Profiles
 

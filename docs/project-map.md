@@ -72,6 +72,7 @@ Important fields:
 | `net.dns` | `DNSServer` | Resolver used by server-side target dials and provider HTTP where wired. |
 | `socks.*` | SOCKS fields | Client listener and optional server egress proxy. |
 | `engine.*` | direct engine fields | Used only with `auth.provider: none`. |
+| `liveness.*` | control liveness | Ping/pong interval, timeout, and missed-pong threshold. |
 
 `internal/app/session` is the main router:
 
@@ -150,6 +151,18 @@ SERVER_REJECT { version, reason }
 ```
 
 The handshake has a 64 KiB frame cap and a default 15 second timeout.
+
+After handshake, `internal/control` keeps that same encrypted smux stream open
+and exchanges length-prefixed JSON control messages:
+
+```text
+CONTROL_PING { version, seq, sent_unix_nano }
+CONTROL_PONG { version, seq, sent_unix_nano }
+```
+
+Defaults are `liveness.interval: 10s`, `liveness.timeout: 5s`, and
+`liveness.failures: 3`. Missed pongs mark the smux session unhealthy and
+trigger a session rebuild/reconnect path.
 
 ## Registries And Plugin Shape
 
@@ -320,9 +333,9 @@ adaptive instead of static YAML knobs.
 
 ### 3. Control Stream Protocol
 
-The first smux stream is parked after handshake. It is the natural place for:
+The first smux stream now carries control ping/pong after handshake. It is
+still the natural place for:
 
-- Ping/pong and peer liveness.
 - Server policy updates.
 - Graceful reconnect notifications.
 - Drain/start markers for failover.
@@ -330,7 +343,7 @@ The first smux stream is parked after handshake. It is the natural place for:
 
 Likely files:
 
-- `internal/handshake`
+- `internal/control`
 - `internal/server`
 - `internal/client`
 

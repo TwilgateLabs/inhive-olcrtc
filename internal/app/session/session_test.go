@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 )
 
 func TestApplyTransportDefaults(t *testing.T) {
@@ -82,6 +84,24 @@ func TestApplyTransportDefaults(t *testing.T) {
 				t.Fatalf("ApplyTransportDefaults() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestApplyLivenessDefaults(t *testing.T) {
+	got := ApplyLivenessDefaults(Config{})
+	if got.LivenessInterval != control.DefaultInterval.String() {
+		t.Fatalf("LivenessInterval = %q, want %q", got.LivenessInterval, control.DefaultInterval.String())
+	}
+	if got.LivenessTimeout != control.DefaultTimeout.String() {
+		t.Fatalf("LivenessTimeout = %q, want %q", got.LivenessTimeout, control.DefaultTimeout.String())
+	}
+	if got.LivenessFailures != control.DefaultFailures {
+		t.Fatalf("LivenessFailures = %d, want %d", got.LivenessFailures, control.DefaultFailures)
+	}
+
+	explicit := Config{LivenessInterval: "1s", LivenessTimeout: "500ms", LivenessFailures: 9}
+	if got := ApplyLivenessDefaults(explicit); got != explicit {
+		t.Fatalf("ApplyLivenessDefaults() = %+v, want %+v", got, explicit)
 	}
 }
 
@@ -421,6 +441,33 @@ func TestValidate(t *testing.T) {
 				cfg.SOCKSPort = 1080
 				return cfg
 			}(),
+		},
+		{
+			name: "liveness rejects bad interval",
+			cfg: func() Config {
+				cfg := base
+				cfg.LivenessInterval = "nope"
+				return cfg
+			}(),
+			want: ErrLivenessIntervalInvalid,
+		},
+		{
+			name: "liveness rejects zero timeout",
+			cfg: func() Config {
+				cfg := base
+				cfg.LivenessTimeout = "0s"
+				return cfg
+			}(),
+			want: ErrLivenessTimeoutInvalid,
+		},
+		{
+			name: "liveness rejects negative failures",
+			cfg: func() Config {
+				cfg := base
+				cfg.LivenessFailures = -1
+				return cfg
+			}(),
+			want: ErrLivenessFailuresInvalid,
 		},
 	}
 

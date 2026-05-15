@@ -21,6 +21,11 @@ net:
   transport: datachannel   # must match the server
   dns: "8.8.8.8:53"
 
+liveness:
+  interval: 10s
+  timeout: 5s
+  failures: 3
+
 # Local SOCKS5 listener exposed to applications
 socks:
   host: "127.0.0.1"

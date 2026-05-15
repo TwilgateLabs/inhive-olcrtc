@@ -13,6 +13,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/carrier"
 	"github.com/openlibrecommunity/olcrtc/internal/carrier/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/link"
 	"github.com/openlibrecommunity/olcrtc/internal/link/direct"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
@@ -120,43 +121,56 @@ var (
 	// ErrSOCKSAuthRequired indicates that a non-loopback SOCKS listener requires authentication.
 	ErrSOCKSAuthRequired = errors.New(
 		"socks auth required when binding outside loopback (set socks.user and socks.pass)")
+
+	// ErrLivenessIntervalInvalid indicates that liveness.interval is not a positive duration.
+	ErrLivenessIntervalInvalid = errors.New(
+		"invalid liveness interval (set liveness.interval to a duration > 0)")
+	// ErrLivenessTimeoutInvalid indicates that liveness.timeout is not a positive duration.
+	ErrLivenessTimeoutInvalid = errors.New(
+		"invalid liveness timeout (set liveness.timeout to a duration > 0)")
+	// ErrLivenessFailuresInvalid indicates that liveness.failures is not positive.
+	ErrLivenessFailuresInvalid = errors.New(
+		"invalid liveness failures (set liveness.failures to a value > 0)")
 )
 
 // Config holds runtime session settings.
 type Config struct {
-	Mode            string
-	Link            string
-	Transport       string
-	Auth            string
-	Engine          string
-	URL             string
-	Token           string
-	RoomID          string
-	KeyHex          string
-	SOCKSHost       string
-	SOCKSPort       int
-	SOCKSUser       string
-	SOCKSPass       string
-	DNSServer       string
-	SOCKSProxyAddr  string
-	SOCKSProxyPort  int
-	VideoWidth      int
-	VideoHeight     int
-	VideoFPS        int
-	VideoBitrate    string
-	VideoHW         string
-	VideoQRSize     int
-	VideoQRRecovery string
-	VideoCodec      string
-	VideoTileModule int
-	VideoTileRS     int
-	VP8FPS          int
-	VP8BatchSize    int
-	SEIFPS          int
-	SEIBatchSize    int
-	SEIFragmentSize int
-	SEIAckTimeoutMS int
-	Amount          int
+	Mode             string
+	Link             string
+	Transport        string
+	Auth             string
+	Engine           string
+	URL              string
+	Token            string
+	RoomID           string
+	KeyHex           string
+	SOCKSHost        string
+	SOCKSPort        int
+	SOCKSUser        string
+	SOCKSPass        string
+	DNSServer        string
+	SOCKSProxyAddr   string
+	SOCKSProxyPort   int
+	VideoWidth       int
+	VideoHeight      int
+	VideoFPS         int
+	VideoBitrate     string
+	VideoHW          string
+	VideoQRSize      int
+	VideoQRRecovery  string
+	VideoCodec       string
+	VideoTileModule  int
+	VideoTileRS      int
+	VP8FPS           int
+	VP8BatchSize     int
+	SEIFPS           int
+	SEIBatchSize     int
+	SEIFragmentSize  int
+	SEIAckTimeoutMS  int
+	LivenessInterval string
+	LivenessTimeout  string
+	LivenessFailures int
+	Amount           int
 }
 
 // RegisterDefaults registers built-in carriers and transports.
@@ -210,6 +224,20 @@ func ApplyTransportDefaults(cfg Config) Config {
 	default:
 		return cfg
 	}
+}
+
+// ApplyLivenessDefaults fills documented control-stream liveness defaults.
+func ApplyLivenessDefaults(cfg Config) Config {
+	if cfg.LivenessInterval == "" {
+		cfg.LivenessInterval = control.DefaultInterval.String()
+	}
+	if cfg.LivenessTimeout == "" {
+		cfg.LivenessTimeout = control.DefaultTimeout.String()
+	}
+	if cfg.LivenessFailures == 0 {
+		cfg.LivenessFailures = control.DefaultFailures
+	}
+	return cfg
 }
 
 func applyVideoDefaults(cfg Config) Config {
@@ -290,6 +318,9 @@ func Validate(cfg Config) error {
 		return err
 	}
 	if err := validateTransportConfig(cfg); err != nil {
+		return err
+	}
+	if err := validateLivenessConfig(cfg); err != nil {
 		return err
 	}
 	return validateModeConfig(cfg)
@@ -431,6 +462,52 @@ func validateModeConfig(cfg Config) error {
 	return nil
 }
 
+func validateLivenessConfig(cfg Config) error {
+	if _, err := parseLivenessDuration(cfg.LivenessInterval, control.DefaultInterval); err != nil {
+		return fmt.Errorf("%w: %v", ErrLivenessIntervalInvalid, err)
+	}
+	if _, err := parseLivenessDuration(cfg.LivenessTimeout, control.DefaultTimeout); err != nil {
+		return fmt.Errorf("%w: %v", ErrLivenessTimeoutInvalid, err)
+	}
+	if cfg.LivenessFailures < 0 {
+		return ErrLivenessFailuresInvalid
+	}
+	return nil
+}
+
+func parseLivenessDuration(value string, def time.Duration) (time.Duration, error) {
+	if value == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("duration must be > 0")
+	}
+	return d, nil
+}
+
+func livenessConfig(cfg Config) (control.Config, error) {
+	interval, err := parseLivenessDuration(cfg.LivenessInterval, control.DefaultInterval)
+	if err != nil {
+		return control.Config{}, fmt.Errorf("%w: %v", ErrLivenessIntervalInvalid, err)
+	}
+	timeout, err := parseLivenessDuration(cfg.LivenessTimeout, control.DefaultTimeout)
+	if err != nil {
+		return control.Config{}, fmt.Errorf("%w: %v", ErrLivenessTimeoutInvalid, err)
+	}
+	failures := cfg.LivenessFailures
+	if failures == 0 {
+		failures = control.DefaultFailures
+	}
+	if failures < 0 {
+		return control.Config{}, ErrLivenessFailuresInvalid
+	}
+	return control.Config{Interval: interval, Timeout: timeout, Failures: failures}, nil
+}
+
 func isLoopbackListenHost(host string) bool {
 	if host == "localhost" {
 		return true
@@ -442,7 +519,12 @@ func isLoopbackListenHost(host string) bool {
 // Run starts the configured mode.
 func Run(ctx context.Context, cfg Config) error {
 	cfg = ApplyTransportDefaults(cfg)
+	cfg = ApplyLivenessDefaults(cfg)
 	roomURL := cfg.RoomID
+	liveness, err := livenessConfig(cfg)
+	if err != nil {
+		return err
+	}
 
 	switch cfg.Mode {
 	case modeSRV:
@@ -474,6 +556,7 @@ func Run(ctx context.Context, cfg Config) error {
 			Engine:          cfg.Engine,
 			URL:             cfg.URL,
 			Token:           cfg.Token,
+			Liveness:        liveness,
 			OnSessionOpen: func(sessionID, deviceID string, claims map[string]any) {
 				logger.Infof("session opened: id=%s device=%s claims=%v", sessionID, deviceID, claims)
 			},
@@ -517,6 +600,7 @@ func Run(ctx context.Context, cfg Config) error {
 			Engine:          cfg.Engine,
 			URL:             cfg.URL,
 			Token:           cfg.Token,
+			Liveness:        liveness,
 		}); err != nil {
 			return fmt.Errorf("client: %w", err)
 		}

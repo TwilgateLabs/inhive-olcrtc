@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
 	"github.com/openlibrecommunity/olcrtc/internal/link"
@@ -54,7 +55,9 @@ type Client struct {
 	conn        *muxconn.Conn
 	session     *smux.Session
 	controlStrm *smux.Stream
+	controlStop context.CancelFunc
 	sessMu      sync.RWMutex
+	reconnectMu sync.Mutex
 	deviceID    string
 	sessionID   string
 	claims      map[string]any
@@ -93,6 +96,7 @@ type Config struct {
 	Engine          string
 	URL             string
 	Token           string
+	Liveness        control.Config
 
 	// DeviceID overrides the persistent client-side device identifier. Leave
 	// empty to derive one from DeviceIDPath (or generate a random one if both
@@ -217,7 +221,9 @@ func (c *Client) bringUpLink(
 		if ctx.Err() != nil {
 			return
 		}
-		c.handleReconnect()
+		if !c.handleReconnect(ctx, cfg, cancel) {
+			cancel()
+		}
 	})
 
 	if err := ln.Connect(ctx); err != nil {
@@ -243,14 +249,15 @@ func (c *Client) bringUpLink(
 	c.controlStrm = control
 	c.sessionID = sid
 	c.sessMu.Unlock()
+	c.startControlLoop(ctx, cfg, cancel, control)
 
 	go ln.WatchConnection(ctx)
 	return nil
 }
 
 // openControlStream opens stream #1 on sess and performs the handshake.
-// The stream stays open for the lifetime of the smux session — the server
-// holds it parked, and it would carry future control messages.
+// The stream stays open for the lifetime of the smux session and carries
+// post-handshake control messages.
 func openControlStream(
 	sess *smux.Session,
 	deviceID string,
@@ -326,7 +333,10 @@ func smuxConfig() *smux.Config {
 	return cfg
 }
 
-func (c *Client) handleReconnect() {
+func (c *Client) handleReconnect(ctx context.Context, cfg Config, cancel context.CancelFunc) bool {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+
 	logger.Infof("client link reconnect - tearing down smux session")
 
 	// Install a fresh muxconn immediately so onData never hits nil while
@@ -336,14 +346,19 @@ func (c *Client) handleReconnect() {
 
 	c.sessMu.Lock()
 	oldControl := c.controlStrm
+	oldControlStop := c.controlStop
 	oldSess := c.session
 	oldConn := c.conn
 	c.conn = newConn
 	c.session = nil
 	c.controlStrm = nil
+	c.controlStop = nil
 	c.sessionID = ""
 	c.sessMu.Unlock()
 
+	if oldControlStop != nil {
+		oldControlStop()
+	}
 	if oldControl != nil {
 		_ = oldControl.Close()
 	}
@@ -364,15 +379,25 @@ func (c *Client) handleReconnect() {
 		attemptDelay = 300 * time.Millisecond
 	)
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if c.tryReopenSession(attempt) {
-			return
+		if c.tryReopenSession(ctx, cfg, cancel, attempt) {
+			return true
 		}
-		time.Sleep(attemptDelay)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(attemptDelay):
+		}
 	}
 	logger.Warnf("client reconnect: exhausted %d handshake attempts", maxAttempts)
+	return false
 }
 
-func (c *Client) tryReopenSession(attempt int) bool {
+func (c *Client) tryReopenSession(
+	ctx context.Context,
+	cfg Config,
+	cancel context.CancelFunc,
+	attempt int,
+) bool {
 	conn := muxconn.New(c.ln, c.cipher)
 
 	c.sessMu.Lock()
@@ -400,19 +425,69 @@ func (c *Client) tryReopenSession(attempt int) bool {
 	c.controlStrm = control
 	c.sessionID = sid
 	c.sessMu.Unlock()
+	c.startControlLoop(ctx, cfg, cancel, control)
 	return true
+}
+
+func (c *Client) startControlLoop(
+	ctx context.Context,
+	cfg Config,
+	cancel context.CancelFunc,
+	stream *smux.Stream,
+) {
+	controlCtx, stop := context.WithCancel(ctx)
+	c.sessMu.Lock()
+	c.controlStop = stop
+	c.sessMu.Unlock()
+
+	liveness := cfg.Liveness
+	onPong := liveness.OnPong
+	onUnhealthy := liveness.OnUnhealthy
+	liveness.OnPong = func(h control.Health) {
+		c.sessMu.RLock()
+		sid := c.sessionID
+		c.sessMu.RUnlock()
+		logger.Debugf("control alive session=%s rtt=%v seq=%d", sid, h.RTT, h.Seq)
+		if onPong != nil {
+			onPong(h)
+		}
+	}
+	liveness.OnUnhealthy = func(missed int) {
+		logger.Warnf("control stream unhealthy on client: missed_pongs=%d", missed)
+		if onUnhealthy != nil {
+			onUnhealthy(missed)
+		}
+	}
+
+	go func() {
+		err := control.Run(controlCtx, stream, liveness)
+		if controlCtx.Err() != nil || ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			logger.Warnf("client control stream ended: %v", err)
+		}
+		if !c.handleReconnect(ctx, cfg, cancel) {
+			cancel()
+		}
+	}()
 }
 
 func (c *Client) shutdown() {
 	c.sessMu.Lock()
 	control := c.controlStrm
+	controlStop := c.controlStop
 	sess := c.session
 	conn := c.conn
 	c.controlStrm = nil
+	c.controlStop = nil
 	c.session = nil
 	c.conn = nil
 	c.sessMu.Unlock()
 
+	if controlStop != nil {
+		controlStop()
+	}
 	if conn != nil {
 		_ = conn.Close()
 	}

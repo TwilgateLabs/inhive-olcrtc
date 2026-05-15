@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	cryptopkg "github.com/openlibrecommunity/olcrtc/internal/crypto"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
 	"github.com/xtaci/smux"
@@ -370,6 +371,77 @@ func TestReinstallSessionFiresOnClose(t *testing.T) {
 	s.closeSession()
 	if got.sid != "sid-123" || got.reason != "closed" {
 		t.Fatalf("onClose = %+v, want {sid-123 closed}", got)
+	}
+}
+
+func TestStartControlLoopReportsPong(t *testing.T) {
+	a, b := net.Pipe()
+	defer func() {
+		_ = a.Close()
+		_ = b.Close()
+	}()
+
+	serverSess, err := smux.Server(a, smuxConfig())
+	if err != nil {
+		t.Fatalf("smux.Server() error = %v", err)
+	}
+	defer func() { _ = serverSess.Close() }()
+	clientSess, err := smux.Client(b, smuxConfig())
+	if err != nil {
+		t.Fatalf("smux.Client() error = %v", err)
+	}
+	defer func() { _ = clientSess.Close() }()
+
+	serverStreamCh := make(chan *smux.Stream, 1)
+	go func() {
+		stream, err := serverSess.AcceptStream()
+		if err == nil {
+			serverStreamCh <- stream
+		}
+	}()
+
+	clientStream, err := clientSess.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream() error = %v", err)
+	}
+	serverStream := <-serverStreamCh
+
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan control.Health, 1)
+	s := &Server{
+		sessionID: "sid-control",
+		liveness: control.Config{
+			Interval: 10 * time.Millisecond,
+			Timeout:  100 * time.Millisecond,
+			Failures: 2,
+			OnPong: func(h control.Health) {
+				select {
+				case got <- h:
+				default:
+				}
+			},
+		},
+	}
+	defer func() {
+		cancel()
+		s.wg.Wait()
+	}()
+	s.startControlLoop(ctx, serverSess, serverStream)
+	go func() {
+		_ = control.Run(ctx, clientStream, control.Config{
+			Interval: 10 * time.Millisecond,
+			Timeout:  100 * time.Millisecond,
+			Failures: 2,
+		})
+	}()
+
+	select {
+	case h := <-got:
+		if h.Seq == 0 {
+			t.Fatal("Health.Seq = 0")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for control pong")
 	}
 }
 

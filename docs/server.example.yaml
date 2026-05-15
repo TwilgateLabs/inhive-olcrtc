@@ -23,6 +23,11 @@ net:
   transport: datachannel   # datachannel | videochannel | seichannel | vp8channel
   dns: "8.8.8.8:53"
 
+liveness:
+  interval: 10s
+  timeout: 5s
+  failures: 3
+
 # Outbound SOCKS5 proxy for server-side egress (optional)
 socks:
   proxy_addr: ""           # e.g. "127.0.0.1"
