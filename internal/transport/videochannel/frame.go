@@ -7,9 +7,21 @@ import (
 
 const (
 	protocolMagic   uint32 = 0x4f565632 // OVV2
-	protocolVersion byte   = 1
+	protocolVersion byte   = 2
 	frameTypeData   byte   = 1
 	frameTypeAck    byte   = 2
+	frameRoleAny    byte   = 0
+	frameRoleServer byte   = 1
+	frameRoleClient byte   = 2
+
+	frameBindingOff   = 7
+	frameSeqOff       = 11
+	frameCRCOff       = 15
+	frameAckLen       = 19
+	frameTotalLenOff  = 19
+	frameFragIdxOff   = 23
+	frameFragTotalOff = 25
+	frameDataHdrLen   = 27
 )
 
 var (
@@ -29,6 +41,8 @@ var (
 
 type transportFrame struct {
 	typ       byte
+	role      byte
+	binding   uint32
 	seq       uint32
 	crc       uint32
 	totalLen  uint32
@@ -65,26 +79,52 @@ func fragmentPayload(data []byte, maxSize int) [][]byte {
 }
 
 func encodeDataFrame(seq, crc uint32, totalLen, fragIdx, fragTotal int, payload []byte) []byte {
-	out := make([]byte, 22+len(payload))
+	return encodeDataFrameForBinding(frameRoleAny, 0, seq, crc, totalLen, fragIdx, fragTotal, payload)
+}
+
+func encodeDataFrameForRole(role byte, seq, crc uint32, totalLen, fragIdx, fragTotal int, payload []byte) []byte {
+	return encodeDataFrameForBinding(role, 0, seq, crc, totalLen, fragIdx, fragTotal, payload)
+}
+
+func encodeDataFrameForBinding(
+	role byte,
+	binding uint32,
+	seq, crc uint32,
+	totalLen, fragIdx, fragTotal int,
+	payload []byte,
+) []byte {
+	out := make([]byte, frameDataHdrLen+len(payload))
 	binary.BigEndian.PutUint32(out[0:4], protocolMagic)
 	out[4] = protocolVersion
 	out[5] = frameTypeData
-	binary.BigEndian.PutUint32(out[6:10], seq)
-	binary.BigEndian.PutUint32(out[10:14], crc)
-	binary.BigEndian.PutUint32(out[14:18], uint32(totalLen)) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
-	binary.BigEndian.PutUint16(out[18:20], uint16(fragIdx)) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
-	binary.BigEndian.PutUint16(out[20:22], uint16(fragTotal)) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
-	copy(out[22:], payload)
+	out[6] = role
+	binary.BigEndian.PutUint32(out[frameBindingOff:frameSeqOff], binding)
+	binary.BigEndian.PutUint32(out[frameSeqOff:frameCRCOff], seq)
+	binary.BigEndian.PutUint32(out[frameCRCOff:frameAckLen], crc)
+	binary.BigEndian.PutUint32(out[frameTotalLenOff:frameFragIdxOff], uint32(totalLen))   //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
+	binary.BigEndian.PutUint16(out[frameFragIdxOff:frameFragTotalOff], uint16(fragIdx))   //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
+	binary.BigEndian.PutUint16(out[frameFragTotalOff:frameDataHdrLen], uint16(fragTotal)) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
+	copy(out[frameDataHdrLen:], payload)
 	return out
 }
 
 func encodeAckFrame(seq, crc uint32) []byte {
-	out := make([]byte, 14)
+	return encodeAckFrameForBinding(frameRoleAny, 0, seq, crc)
+}
+
+func encodeAckFrameForRole(role byte, seq, crc uint32) []byte {
+	return encodeAckFrameForBinding(role, 0, seq, crc)
+}
+
+func encodeAckFrameForBinding(role byte, binding, seq, crc uint32) []byte {
+	out := make([]byte, frameAckLen)
 	binary.BigEndian.PutUint32(out[0:4], protocolMagic)
 	out[4] = protocolVersion
 	out[5] = frameTypeAck
-	binary.BigEndian.PutUint32(out[6:10], seq)
-	binary.BigEndian.PutUint32(out[10:14], crc)
+	out[6] = role
+	binary.BigEndian.PutUint32(out[frameBindingOff:frameSeqOff], binding)
+	binary.BigEndian.PutUint32(out[frameSeqOff:frameCRCOff], seq)
+	binary.BigEndian.PutUint32(out[frameCRCOff:frameAckLen], crc)
 	return out
 }
 
@@ -100,24 +140,36 @@ func decodeTransportFrame(data []byte) (transportFrame, error) {
 	}
 
 	frame := transportFrame{typ: data[5]}
+	if len(data) < frameSeqOff {
+		switch frame.typ {
+		case frameTypeAck:
+			return transportFrame{}, ErrAckTooShort
+		case frameTypeData:
+			return transportFrame{}, ErrDataTooShort
+		default:
+			return transportFrame{}, ErrUnexpectedFrameType
+		}
+	}
+	frame.role = data[6]
+	frame.binding = binary.BigEndian.Uint32(data[frameBindingOff:frameSeqOff])
 	switch frame.typ {
 	case frameTypeAck:
-		if len(data) < 14 {
+		if len(data) < frameAckLen {
 			return transportFrame{}, ErrAckTooShort
 		}
-		frame.seq = binary.BigEndian.Uint32(data[6:10])
-		frame.crc = binary.BigEndian.Uint32(data[10:14])
+		frame.seq = binary.BigEndian.Uint32(data[frameSeqOff:frameCRCOff])
+		frame.crc = binary.BigEndian.Uint32(data[frameCRCOff:frameAckLen])
 		return frame, nil
 	case frameTypeData:
-		if len(data) < 22 {
+		if len(data) < frameDataHdrLen {
 			return transportFrame{}, ErrDataTooShort
 		}
-		frame.seq = binary.BigEndian.Uint32(data[6:10])
-		frame.crc = binary.BigEndian.Uint32(data[10:14])
-		frame.totalLen = binary.BigEndian.Uint32(data[14:18])
-		frame.fragIdx = binary.BigEndian.Uint16(data[18:20])
-		frame.fragTotal = binary.BigEndian.Uint16(data[20:22])
-		frame.payload = append([]byte(nil), data[22:]...)
+		frame.seq = binary.BigEndian.Uint32(data[frameSeqOff:frameCRCOff])
+		frame.crc = binary.BigEndian.Uint32(data[frameCRCOff:frameAckLen])
+		frame.totalLen = binary.BigEndian.Uint32(data[frameTotalLenOff:frameFragIdxOff])
+		frame.fragIdx = binary.BigEndian.Uint16(data[frameFragIdxOff:frameFragTotalOff])
+		frame.fragTotal = binary.BigEndian.Uint16(data[frameFragTotalOff:frameDataHdrLen])
+		frame.payload = append([]byte(nil), data[frameDataHdrLen:]...)
 		return frame, nil
 	default:
 		return transportFrame{}, ErrUnexpectedFrameType

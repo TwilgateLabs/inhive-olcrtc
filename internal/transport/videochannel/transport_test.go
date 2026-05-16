@@ -62,12 +62,13 @@ func TestTileIdleFrameIgnored(t *testing.T) {
 }
 
 func TestTransportFrameRoundTrip(t *testing.T) {
-	encoded := encodeDataFrame(42, 0xdeadbeef, 1024, 1, 3, []byte("chunk"))
+	encoded := encodeDataFrameForBinding(frameRoleClient, 0x12345678, 42, 0xdeadbeef, 1024, 1, 3, []byte("chunk"))
 	decoded, err := decodeTransportFrame(encoded)
 	if err != nil {
 		t.Fatalf("decodeTransportFrame failed: %v", err)
 	}
-	if decoded.typ != frameTypeData || decoded.seq != 42 || decoded.crc != 0xdeadbeef {
+	if decoded.typ != frameTypeData || decoded.role != frameRoleClient ||
+		decoded.binding != 0x12345678 || decoded.seq != 42 || decoded.crc != 0xdeadbeef {
 		t.Fatalf("unexpected frame header: %+v", decoded)
 	}
 	if decoded.totalLen != 1024 || decoded.fragIdx != 1 || decoded.fragTotal != 3 {
@@ -75,5 +76,26 @@ func TestTransportFrameRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(decoded.payload, []byte("chunk")) {
 		t.Fatalf("payload mismatch: got=%q", decoded.payload)
+	}
+}
+
+func TestAcceptFrameRole(t *testing.T) {
+	server := &streamTransport{remoteRole: frameRoleClient, bindingToken: 10}
+	if !server.acceptFrame(transportFrame{role: frameRoleClient, binding: 10}) {
+		t.Fatal("server rejected client frame")
+	}
+	if server.acceptFrame(transportFrame{role: frameRoleServer, binding: 10}) {
+		t.Fatal("server accepted server frame")
+	}
+	if server.acceptFrame(transportFrame{role: frameRoleClient, binding: 11}) {
+		t.Fatal("server accepted different binding")
+	}
+
+	client := &streamTransport{remoteRole: frameRoleServer, bindingToken: 20}
+	if !client.acceptFrame(transportFrame{role: frameRoleServer, binding: 20}) {
+		t.Fatal("client rejected server frame")
+	}
+	if client.acceptFrame(transportFrame{role: frameRoleClient, binding: 20}) {
+		t.Fatal("client accepted client frame")
 	}
 }

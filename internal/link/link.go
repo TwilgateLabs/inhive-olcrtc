@@ -42,6 +42,7 @@ type Config struct {
 	Engine          string
 	URL             string
 	Token           string
+	ChannelID       string
 	DeviceID        string
 	Name            string
 	OnData          func([]byte)

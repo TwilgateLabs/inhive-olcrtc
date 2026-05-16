@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -760,6 +761,7 @@ func startRealTunnel(
 
 	session.RegisterDefaults()
 	socksAddr := freeLocalAddr(ctx, t)
+	channelID := fmt.Sprintf("e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -771,6 +773,7 @@ func startRealTunnel(
 			Transport:       transportName,
 			Carrier:         carrierName,
 			RoomURL:         roomURL,
+			ChannelID:       channelID,
 			KeyHex:          testKeyHex,
 			DNSServer:       localDNSServer,
 			VideoWidth:      1080,
@@ -810,6 +813,7 @@ func startRealTunnel(
 			Transport:       transportName,
 			Carrier:         carrierName,
 			RoomURL:         roomURL,
+			ChannelID:       channelID,
 			KeyHex:          testKeyHex,
 			DeviceID:        clientDeviceID,
 			LocalAddr:       socksAddr,

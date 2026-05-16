@@ -83,7 +83,8 @@ type Auth struct {
 
 // Room identifies the conference room.
 type Room struct {
-	ID string `yaml:"id"`
+	ID      string `yaml:"id"`
+	Channel string `yaml:"channel"`
 }
 
 // Crypto holds the shared secret used to authenticate and encrypt the tunnel.
@@ -249,6 +250,7 @@ func Apply(dst session.Config, f File) session.Config {
 	dst.URL = pickString(dst.URL, f.Engine.URL)
 	dst.Token = pickString(dst.Token, f.Engine.Token)
 	dst.RoomID = pickString(dst.RoomID, f.Room.ID)
+	dst.ChannelID = pickString(dst.ChannelID, f.Room.Channel)
 	dst.KeyHex = pickString(dst.KeyHex, f.Crypto.Key)
 	dst.SOCKSHost = pickString(dst.SOCKSHost, f.SOCKS.Host)
 	dst.SOCKSPort = pickInt(dst.SOCKSPort, f.SOCKS.Port)
@@ -294,6 +296,7 @@ func ApplyProfile(base session.Config, p Profile) session.Config {
 	dst.URL = overlayString(dst.URL, p.Engine.URL)
 	dst.Token = overlayString(dst.Token, p.Engine.Token)
 	dst.RoomID = overlayString(dst.RoomID, p.Room.ID)
+	dst.ChannelID = overlayString(dst.ChannelID, p.Room.Channel)
 	dst.KeyHex = overlayString(dst.KeyHex, p.Crypto.Key)
 	dst.SOCKSHost = overlayString(dst.SOCKSHost, p.SOCKS.Host)
 	dst.SOCKSPort = overlayInt(dst.SOCKSPort, p.SOCKS.Port)

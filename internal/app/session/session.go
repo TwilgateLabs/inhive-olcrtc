@@ -161,6 +161,7 @@ type Config struct {
 	URL                   string
 	Token                 string
 	RoomID                string
+	ChannelID             string
 	KeyHex                string
 	SOCKSHost             string
 	SOCKSPort             int
@@ -643,6 +644,7 @@ func runOnce(
 			Transport:       cfg.Transport,
 			Carrier:         cfg.Auth,
 			RoomURL:         roomURL,
+			ChannelID:       cfg.ChannelID,
 			KeyHex:          cfg.KeyHex,
 			DNSServer:       cfg.DNSServer,
 			SOCKSProxyAddr:  cfg.SOCKSProxyAddr,
@@ -687,6 +689,7 @@ func runOnce(
 			Transport:       cfg.Transport,
 			Carrier:         cfg.Auth,
 			RoomURL:         roomURL,
+			ChannelID:       cfg.ChannelID,
 			KeyHex:          cfg.KeyHex,
 			LocalAddr:       fmt.Sprintf("%s:%d", cfg.SOCKSHost, cfg.SOCKSPort),
 			DNSServer:       cfg.DNSServer,

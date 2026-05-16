@@ -45,8 +45,8 @@ type streamTransport struct {
 	codec           codecSpec
 	encoder         *ffmpegEncoder
 	encoderMu       sync.Mutex
-	decoder         *ffmpegDecoder
 	decoderMu       sync.Mutex
+	decoders        map[*ffmpegDecoder]struct{}
 	onData          func([]byte)
 	outbound        chan []byte
 	outboundAck     chan []byte
@@ -72,6 +72,9 @@ type streamTransport struct {
 	videoCodec      string
 	videoTileModule int
 	videoTileRS     int
+	localRole       byte
+	remoteRole      byte
+	bindingToken    uint32
 	runCtx          context.Context //nolint:containedctx,lll // long-lived context drives idle-frame loops bound to this transport's lifetime
 
 	idleFrame   []byte
@@ -138,6 +141,7 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		outboundAck:     make(chan []byte, 64),
 		closeCh:         make(chan struct{}),
 		writerDone:      make(chan struct{}),
+		decoders:        make(map[*ffmpegDecoder]struct{}),
 		ackWaiters:      make(map[uint32]chan uint32),
 		inbound:         make(map[uint32]*inboundMessage),
 		delivered:       make(map[uint32]uint32),
@@ -151,6 +155,9 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		videoCodec:      cfg.VideoCodec,
 		videoTileModule: tileModule,
 		videoTileRS:     tileRS,
+		localRole:       localFrameRole(cfg.DeviceID),
+		remoteRole:      remoteFrameRole(cfg.DeviceID),
+		bindingToken:    bindingToken(cfg.ChannelID),
 		runCtx:          ctx,
 	}
 
@@ -222,7 +229,7 @@ func (p *streamTransport) Send(data []byte) error {
 
 	for range maxSendAttempts {
 		for idx, fragment := range fragments {
-			frame := encodeDataFrame(seq, crc, len(data), idx, len(fragments), fragment)
+			frame := encodeDataFrameForBinding(p.localRole, p.bindingToken, seq, crc, len(data), idx, len(fragments), fragment)
 			if err := p.enqueueFrame(frame, false); err != nil {
 				return err
 			}
@@ -257,9 +264,10 @@ func (p *streamTransport) Close() error {
 		p.encoderMu.Unlock()
 
 		p.decoderMu.Lock()
-		if p.decoder != nil {
-			_ = p.decoder.Close()
+		for decoder := range p.decoders {
+			_ = decoder.Close()
 		}
+		p.decoders = nil
 		p.decoderMu.Unlock()
 
 		if p.writerUp.Load() {
@@ -445,8 +453,8 @@ func (p *streamTransport) enqueueFrame(frame []byte, priority bool) error {
 func (p *streamTransport) popDecoderFrames(decoder *ffmpegDecoder) {
 	defer func() {
 		p.decoderMu.Lock()
-		if p.decoder == decoder {
-			p.decoder = nil
+		if p.decoders != nil {
+			delete(p.decoders, decoder)
 		}
 		p.decoderMu.Unlock()
 		_ = decoder.Close()
@@ -511,15 +519,12 @@ func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc
 	}
 
 	p.decoderMu.Lock()
-	if p.closed.Load() {
+	if p.closed.Load() || p.decoders == nil {
 		p.decoderMu.Unlock()
 		_ = decoder.Close()
 		return
 	}
-	if p.decoder != nil {
-		_ = p.decoder.Close()
-	}
-	p.decoder = decoder
+	p.decoders[decoder] = struct{}{}
 	p.decoderMu.Unlock()
 
 	go p.popDecoderFrames(decoder)
@@ -540,6 +545,9 @@ func (p *streamTransport) handleFrame(frame []byte) {
 	decoded, err := decodeTransportFrame(payload)
 	if err != nil {
 		logger.Debugf("videochannel decode transport frame error: %v", err)
+		return
+	}
+	if !p.acceptFrame(decoded) {
 		return
 	}
 
@@ -620,7 +628,7 @@ func (p *streamTransport) handleInboundFrame(frame transportFrame) {
 }
 
 func (p *streamTransport) sendAck(seq, crc uint32) {
-	_ = p.enqueueFrame(encodeAckFrame(seq, crc), true)
+	_ = p.enqueueFrame(encodeAckFrameForBinding(p.localRole, p.bindingToken, seq, crc), true)
 }
 
 func (p *streamTransport) resolveAck(seq, crc uint32) {
@@ -647,4 +655,32 @@ func randomID() string {
 		return fmt.Sprintf("%08x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+func localFrameRole(deviceID string) byte {
+	if deviceID == "" {
+		return frameRoleServer
+	}
+	return frameRoleClient
+}
+
+func remoteFrameRole(deviceID string) byte {
+	if deviceID == "" {
+		return frameRoleClient
+	}
+	return frameRoleServer
+}
+
+func bindingToken(channelID string) uint32 {
+	token := crc32.ChecksumIEEE([]byte(channelID))
+	if token == 0 && channelID != "" {
+		token = 1
+	}
+	return token
+}
+
+func (p *streamTransport) acceptFrame(frame transportFrame) bool {
+	roleOK := frame.role == frameRoleAny || frame.role == p.remoteRole
+	bindingOK := frame.binding == 0 || frame.binding == p.bindingToken
+	return roleOK && bindingOK
 }

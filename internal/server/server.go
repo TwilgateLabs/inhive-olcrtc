@@ -93,6 +93,7 @@ type Config struct {
 	Transport       string
 	Carrier         string
 	RoomURL         string
+	ChannelID       string
 	KeyHex          string
 	DNSServer       string
 	SOCKSProxyAddr  string
@@ -274,6 +275,7 @@ func (s *Server) bringUpLink(
 		Engine:          cfg.Engine,
 		URL:             cfg.URL,
 		Token:           cfg.Token,
+		ChannelID:       cfg.ChannelID,
 		DeviceID:        "",
 		Name:            names.Generate(),
 		OnData:          s.onData,
