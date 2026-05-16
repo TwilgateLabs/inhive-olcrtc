@@ -247,12 +247,12 @@ func (s *Server) bringUpLink(
 	})
 
 	logger.Infof("Connecting transport=%s carrier=%s ...", cfg.Transport, cfg.Carrier)
+	s.installSession()
+
 	if err := ln.Connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect link: %w", err)
 	}
 	logger.Infof("Link connected")
-
-	s.installSession()
 
 	s.wg.Add(1)
 	go func() {
@@ -517,11 +517,11 @@ func (s *Server) Status() control.Status {
 	return s.health.Status()
 }
 
-func (s *Server) recordSession(sessionID string)  { s.health.RecordSession(sessionID) }
-func (s *Server) recordPong(h control.Health)     { s.health.RecordPong(h) }
-func (s *Server) recordMissed(missed int)         { s.health.RecordMissed(missed) }
-func (s *Server) recordUnhealthy(missed int)      { s.health.RecordUnhealthy(missed) }
-func (s *Server) recordReconnect()                { s.health.RecordReconnect() }
+func (s *Server) recordSession(sessionID string) { s.health.RecordSession(sessionID) }
+func (s *Server) recordPong(h control.Health)    { s.health.RecordPong(h) }
+func (s *Server) recordMissed(missed int)        { s.health.RecordMissed(missed) }
+func (s *Server) recordUnhealthy(missed int)     { s.health.RecordUnhealthy(missed) }
+func (s *Server) recordReconnect()               { s.health.RecordReconnect() }
 
 func (s *Server) shutdown() {
 	s.closeSession()

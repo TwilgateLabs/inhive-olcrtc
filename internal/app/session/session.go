@@ -600,6 +600,7 @@ func isLoopbackListenHost(host string) bool {
 func Run(ctx context.Context, cfg Config) error {
 	cfg = ApplyTransportDefaults(cfg)
 	cfg = ApplyLivenessDefaults(cfg)
+	configureDefaultResolver(cfg.DNSServer)
 	roomURL := cfg.RoomID
 	liveness, err := livenessConfig(cfg)
 	if err != nil {
@@ -621,6 +622,19 @@ func Run(ctx context.Context, cfg Config) error {
 		return runWithSessionRotation(ctx, maxDuration, run)
 	}
 	return run(ctx)
+}
+
+func configureDefaultResolver(dnsServer string) {
+	if dnsServer == "" {
+		return
+	}
+	net.DefaultResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 3 * time.Second}
+			return d.DialContext(ctx, network, dnsServer)
+		},
+	}
 }
 
 func runOnce(
@@ -775,6 +789,7 @@ func genRetry(ctx context.Context, fn func(context.Context) error) error {
 
 // Gen creates cfg.Amount rooms for the configured auth provider and writes each room ID to out.
 func Gen(ctx context.Context, cfg Config, out func(string)) error {
+	configureDefaultResolver(cfg.DNSServer)
 	p, err := auth.Get(cfg.Auth)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrUnsupportedCarrier, cfg.Auth)
@@ -787,7 +802,7 @@ func Gen(ctx context.Context, cfg Config, out func(string)) error {
 		var roomID string
 		err := genRetry(ctx, func(ctx context.Context) error {
 			var genErr error
-			roomID, genErr = creator.CreateRoom(ctx, auth.Config{Name: names.Generate()})
+			roomID, genErr = creator.CreateRoom(ctx, auth.Config{Name: names.Generate(), DNSServer: cfg.DNSServer})
 			if genErr != nil {
 				return fmt.Errorf("CreateRoom: %w", genErr)
 			}
