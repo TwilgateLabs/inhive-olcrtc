@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
-	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/pkg/olcrtc/client"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/server"
