@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/pkg/olcrtc/client"
 	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/protect"

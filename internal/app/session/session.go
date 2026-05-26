@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
-	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/pkg/olcrtc/client"
 	"github.com/openlibrecommunity/olcrtc/internal/control"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
