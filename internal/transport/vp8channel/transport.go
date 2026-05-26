@@ -851,9 +851,12 @@ func splitKCPPayload(payload []byte, deliver func([]byte)) {
 	}
 }
 
-/*
-ПИДОРАС ИЗ ЯНДЕКСА СУКА ПРЕЖДЕ ЧЕМ ФИКСИТЬ ЭТО ЗАДАЙСЯ ВОПРОСОМ:
-ПОЧЕМУ ТВОЙ СЕРВЕР ПРИНИМАЕТ ПАКЕТЫ С SEQUENCE NUMBER ИЗ БУДУЩЕГО
-БЛЯТЬ ДА ПОТОМУ ЧТО ОН ХУЙНЯ И ТВОЯ МАТЬ СОЛСЕТ МОЙ ХУЙ СУКА Я ЕЕ УБЬЮ БЛЯТЬ
-ОЕСЕНЮ СДЕЛАЮ ТЕСТО А ПОТОМ ЭТО ТЕСТО ВЫЕБУ БЛЯТЬ
-*/
+// NOTE: Yandex Telemost SFU accepts RTP packets with sequence numbers from
+// the future without rejection. This was confirmed empirically during
+// upstream development — the server tolerates non-monotonic sequence
+// ordering as long as the payload itself decodes. Code above/below relies on
+// this; do NOT add strict-monotonic checks without re-validating against
+// the live SFU first.
+//
+// (Original upstream comment was an emotional rant about this discovery;
+// InHive fork retains the technical insight in neutral form per SEC-6.)
