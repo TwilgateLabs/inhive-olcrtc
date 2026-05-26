@@ -37,6 +37,8 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/auth"
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
+	"github.com/openlibrecommunity/olcrtc/internal/transport"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/datachannel"
 )
 
 var (
@@ -85,11 +87,21 @@ type Session struct {
 	authCfg      auth.Config
 }
 
-// RegisterDefaults registers all built-in engines and auth providers.
+// RegisterDefaults registers all built-in engines, auth providers, and
+// transports needed by external embedders.
+//
 // Call once at program start if you want the full set without manual blank
-// imports. Safe to call multiple times.
+// imports. Safe to call multiple times (each underlying registry is
+// idempotent — same factory pointer overwrites).
+//
+// SEC-2 inhive fork stance: only `datachannel` transport is registered here.
+// Video-bearing transports (videochannel / seichannel / vp8channel) accept
+// crafted media frames from shared SFU rooms — security risk in
+// embed-in-VPN context. Embedders that need them must register them
+// explicitly via blank imports from `internal/transport/<name>`.
 func RegisterDefaults() {
 	enginebuiltin.RegisterDefaults()
+	transport.Register("datachannel", datachannel.New)
 }
 
 // New creates a Session from cfg. The session is not connected yet; call
