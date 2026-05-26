@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlibrecommunity/olcrtc/internal/client"
+	"github.com/openlibrecommunity/olcrtc/pkg/olcrtc/client"
 	"github.com/openlibrecommunity/olcrtc/internal/server"
 )
 
