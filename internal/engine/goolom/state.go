@@ -1,16 +1,11 @@
 package goolom
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"math/rand/v2"
-	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
-	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 func (s *Session) processSendQueue(workerID int, sessionCloseCh <-chan struct{}) {
@@ -138,45 +133,27 @@ func (s *Session) stopTelemetry() {
 	}
 }
 
+// sendTelemetry: InHive fork no-op (SEC-3 server-side hardening).
+//
+// Upstream sent {event, timestamp, peerId, roomId, displayName, send_queue
+// stats, dataChannel.bufferedAmount} to an endpoint provided by the SFU's
+// server-hello — i.e. whoever responds at the carrier API gets a side-channel
+// beacon pinned to a particular peerId+roomId.
+//
+// Normally trustable (Yandex Telemost's own URL), but in the DNS-poisoning or
+// BGP-hijack threat model an attacker who substitutes the SFU response gets a
+// stable correlation channel against our users. Yandex's bot detection does
+// NOT fail without these payloads (verified empirically), so we strip them.
+//
+// The ctx/endpoint/event params are kept in the signature so call sites
+// (state.go lines 94/98/100/103) don't need a coordinated bump.
+//
+// See InHive memory/security_mitigations_olcrtc_pending.md SEC-3 and M-2 in
+// memory/audit_olcrtc_2026_05_26.md.
 func (s *Session) sendTelemetry(ctx context.Context, endpoint, event string) {
-	body, err := json.Marshal(map[string]any{
-		"event":          event,
-		"timestamp":      time.Now().UnixMilli(),
-		"peerId":         s.peerID,
-		"roomId":         s.roomID,
-		"displayName":    s.name,
-		"implementation": "browser",
-		"dataChannel": map[string]any{
-			"bufferedAmount": s.GetBufferedAmount(),
-			"sendQueue":      len(s.sendQueue),
-		},
-	})
-	if err != nil {
-		return
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		logger.Verbosef("Telemetry req error: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0")
-	if s.telemetryReferer != "" {
-		req.Header.Set("Referer", s.telemetryReferer)
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Client-Instance-Id", uuid.New().String())
-	req.Header.Set("X-Telemost-Client-Version", "187.1.0")
-	req.Header.Set("Idempotency-Key", uuid.New().String())
-
-	client := protect.NewHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		logger.Verbosef("Telemetry send error: %v", err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
+	_ = ctx
+	_ = endpoint
+	_ = event
 }
 
 func goolomCapabilitiesOffer() map[string]any {
