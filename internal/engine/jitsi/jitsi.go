@@ -1117,20 +1117,16 @@ func (s *Session) deliverBridgeMessage(msg j.BridgeMessage, ok bool) bool {
 	if s.onPeerData != nil && msg.From != "" {
 		return s.deliverPeerBridgePayload(msg.From, payload)
 	}
-	// InHive multi-client fix: in a shared MUC with several olcrtc clients,
-	// each client also sees broadcast bridge frames addressed to OTHER clients.
-	// Upstream peerLatchAccepts (90e2ed9) re-latches onto ANY olcrtc sender, so
-	// without this guard a second client re-latches a first client onto its own
-	// frames and steals its link to the joiner — the "two phones on one config,
-	// only one gets traffic" regression. Only frames addressed to US (receiver
-	// epoch == our localEpoch, or 0 during handshake) may drive latch/re-latch;
-	// a peer client's frames (addressed to the joiner) are ignored here. This
-	// preserves the upstream rejoin fix: our partner's post-reconnect frames are
-	// still addressed to us, so re-latching onto its new endpoint id still works.
-	if !s.frameAddressedToUs(payload) {
-		return true
-	}
-	if !s.peerLatchAccepts(msg.From) {
+	// InHive multi-client fix: gate only RE-LATCH (not the initial latch /
+	// handshake) on whether the frame is addressed to us. In a shared MUC with
+	// several olcrtc clients, a PEER client's broadcast frames are addressed to
+	// the joiner, not us; upstream peerLatchAccepts (90e2ed9) would re-latch onto
+	// them and steal our link ("two phones on one config, only one gets traffic").
+	// The flag is consumed ONLY in the re-latch branch — the first welcome
+	// (peerEndpoint==nil) must never be gated by it (gating it regressed v0.0.6:
+	// read-welcome timeout). Our partner's post-reconnect frames stay addressed
+	// to us, so legitimate re-latch (rejoin #9) still works.
+	if !s.peerLatchAccepts(msg.From, s.frameAddressedToUs(payload)) {
 		return true
 	}
 	data, ok := s.acceptEpochFrame(payload)
@@ -1286,7 +1282,7 @@ func (s *Session) inReconnectGrace() bool {
 // magic. A non-olcrtc participant in the same MUC (a regular Jitsi web
 // client, an unrelated bot, etc.) gets filtered out before we ever
 // get here.
-func (s *Session) peerLatchAccepts(from string) bool { //nolint:unparam // filter contract; always-true is policy
+func (s *Session) peerLatchAccepts(from string, addressedToUs bool) bool {
 	if cur := s.peerEndpoint.Load(); cur != nil {
 		if *cur == from {
 			return true
@@ -1301,6 +1297,15 @@ func (s *Session) peerLatchAccepts(from string) bool { //nolint:unparam // filte
 			// Empty from is a JVB-broadcast frame (e.g. our own
 			// echo back). Don't re-latch on that.
 			return true
+		}
+		// InHive multi-client fix: only re-latch when this frame is
+		// addressed to US. A peer client sharing the MUC sends frames
+		// addressed to the joiner (receiverEpoch != our localEpoch), not
+		// us — don't steal our latch onto it; drop it for our data path.
+		// Our real partner's post-reconnect frames carry our epoch, so
+		// legitimate rejoin re-latch is unaffected.
+		if !addressedToUs {
+			return false
 		}
 		newFrom := from
 		if s.peerEndpoint.CompareAndSwap(cur, &newFrom) {
