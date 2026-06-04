@@ -1117,6 +1117,19 @@ func (s *Session) deliverBridgeMessage(msg j.BridgeMessage, ok bool) bool {
 	if s.onPeerData != nil && msg.From != "" {
 		return s.deliverPeerBridgePayload(msg.From, payload)
 	}
+	// InHive multi-client fix: in a shared MUC with several olcrtc clients,
+	// each client also sees broadcast bridge frames addressed to OTHER clients.
+	// Upstream peerLatchAccepts (90e2ed9) re-latches onto ANY olcrtc sender, so
+	// without this guard a second client re-latches a first client onto its own
+	// frames and steals its link to the joiner — the "two phones on one config,
+	// only one gets traffic" regression. Only frames addressed to US (receiver
+	// epoch == our localEpoch, or 0 during handshake) may drive latch/re-latch;
+	// a peer client's frames (addressed to the joiner) are ignored here. This
+	// preserves the upstream rejoin fix: our partner's post-reconnect frames are
+	// still addressed to us, so re-latching onto its new endpoint id still works.
+	if !s.frameAddressedToUs(payload) {
+		return true
+	}
 	if !s.peerLatchAccepts(msg.From) {
 		return true
 	}
@@ -1174,6 +1187,23 @@ func (s *Session) acceptPeerEpochFrame(from string, payload []byte) ([]byte, boo
 	}
 	s.peerEpochMu.Unlock()
 	return payload[off+epochHeaderLen:], true
+}
+
+// frameAddressedToUs reports whether a single-peer (client-side) bridge frame
+// is destined for this session, by comparing the frame's receiver-epoch header
+// against our localEpoch. A receiverEpoch of 0 means the sender has not learned
+// our epoch yet (initial handshake) and is allowed through. Frames carrying a
+// non-zero receiverEpoch that differs from ours belong to another olcrtc client
+// sharing the same MUC and must NOT drive our peer latch (see multi-client fix
+// in receiveBridge dispatch).
+func (s *Session) frameAddressedToUs(payload []byte) bool {
+	const epochHeaderLen = 8
+	if len(payload) < len(bridgeMagic)+epochHeaderLen {
+		return true // too short to classify — defer to downstream epoch check
+	}
+	off := len(bridgeMagic)
+	receiverEpoch := binary.BigEndian.Uint32(payload[off+4 : off+epochHeaderLen])
+	return receiverEpoch == 0 || receiverEpoch == s.localEpoch.Load()
 }
 
 func (s *Session) acceptEpochFrame(payload []byte) ([]byte, bool) {
